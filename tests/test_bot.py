@@ -13,7 +13,12 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src_path = os.path.join(project_root, 'src')
 sys.path.insert(0, src_path)
 
-from bot import parse_time_period
+from src.bot import (
+    parse_time_period,
+    validate_topic,
+    validate_period,
+    IssueMonitorBot
+)
 
 
 class TestTimePeriodParsing:
@@ -107,55 +112,6 @@ class TestTimePeriodParsing:
         assert start_date < datetime.now()
 
 
-class TestConfigLoading:
-    """설정 로딩 테스트 클래스"""
-
-    @pytest.mark.unit
-    def test_config_import(self):
-        """Config 클래스 import 테스트"""
-        try:
-            from config import Config
-            config = Config()
-            assert config is not None
-        except ImportError:
-            pytest.fail("Config 클래스를 import할 수 없습니다")
-
-    @pytest.mark.unit
-    def test_config_with_env_vars(self):
-        """환경변수가 있을 때 Config 로딩 테스트"""
-        # config 모듈을 다시 import하기 위해 sys.modules에서 제거
-        if 'config' in sys.modules:
-            del sys.modules['config']
-
-        with patch.dict(os.environ, {
-            'DISCORD_BOT_TOKEN': 'test_token',
-            'OPENAI_API_KEY': 'test_openai_key',
-            'PERPLEXITY_API_KEY': 'test_perplexity_key'
-        }, clear=False):
-            # 환경변수 설정 후 config 다시 import
-            import importlib
-            import config
-            importlib.reload(config)
-
-            test_config = config.Config()
-
-            assert test_config.DISCORD_BOT_TOKEN == 'test_token'
-            assert test_config.OPENAI_API_KEY == 'test_openai_key'
-            assert test_config.PERPLEXITY_API_KEY == 'test_perplexity_key'
-
-    @pytest.mark.unit
-    def test_config_basic_attributes(self):
-        """Config 기본 속성 존재 테스트"""
-        from config import Config
-        config = Config()
-
-        # 속성이 존재하는지만 확인 (값은 환경에 따라 다를 수 있음)
-        assert hasattr(config, 'DISCORD_BOT_TOKEN')
-        assert hasattr(config, 'OPENAI_API_KEY')
-        assert hasattr(config, 'PERPLEXITY_API_KEY')
-        assert hasattr(config, 'DEBUG')
-
-
 class TestInputValidation:
     """입력값 검증 테스트 클래스"""
 
@@ -172,67 +128,64 @@ class TestInputValidation:
     ])
     def test_topic_validation(self, topic, expected):
         """주제 유효성 검증 테스트"""
-        is_valid = topic and len(topic.strip()) >= 2
-        assert is_valid == expected
+        result = validate_topic(topic)
+        assert result == expected
 
     @pytest.mark.unit
     def test_empty_string_validation(self):
         """빈 문자열 별도 테스트"""
-        topic = ""
-        is_valid = topic and len(topic.strip()) >= 2
-
-        # 실제 동작 확인: topic이 빈 문자열일 때 and 연산은 빈 문자열을 반환
-        assert is_valid == ""      # 실제로는 빈 문자열이 반환됨
-        assert not is_valid        # falsy 값이므로 not 연산은 True
-        assert bool(is_valid) == False  # bool로 변환하면 False
-
-        # 더 정확한 validation 함수 테스트
-        def validate_topic(topic_str):
-            return bool(topic_str and len(topic_str.strip()) >= 2)
-
-        assert validate_topic("") == False      # 정확히 False 반환
-        assert validate_topic("AI") == True     # 정확히 True 반환
+        assert validate_topic("") == False
+        assert validate_topic("AI") == True
 
     @pytest.mark.unit
     def test_topic_length_boundary(self):
         """주제 길이 경계값 테스트"""
         # 정확히 2글자
-        assert len("AI".strip()) >= 2
+        assert validate_topic("AI") == True
 
         # 1글자 (무효)
-        assert not (len("A".strip()) >= 2)
+        assert validate_topic("A") == False
 
         # 매우 긴 주제 (유효)
         long_topic = "매우 긴 주제명으로 테스트하는 경우입니다" * 10
-        assert len(long_topic.strip()) >= 2
+        assert validate_topic(long_topic) == True
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("period,expected", [
+        ("1일", True),
+        ("3주일", True),
+        ("2개월", True),
+        ("24시간", True),
+        ("", True),  # 빈 값은 기본값 사용
+        ("잘못된형식", False),
+        ("abc일", False),
+    ])
+    def test_period_validation(self, period, expected):
+        """기간 유효성 검증 테스트"""
+        result = validate_period(period)
+        assert result == expected
 
 
 class TestBotIntegration:
     """봇 통합 테스트 클래스"""
 
     @pytest.mark.integration
-    def test_bot_import(self):
-        """봇 모듈 import 테스트"""
-        try:
-            from bot import IssueMonitorBot
-            bot = IssueMonitorBot()
-            assert bot is not None
-            assert hasattr(bot, 'tree')  # 슬래시 명령어 트리
-        except ImportError:
-            pytest.fail("IssueMonitorBot을 import할 수 없습니다")
+    def test_bot_initialization(self):
+        """봇 초기화 테스트"""
+        bot = IssueMonitorBot()
+        assert bot is not None
+        assert hasattr(bot, 'tree')  # 슬래시 명령어 트리
+        assert bot.command_prefix == '!'
 
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_bot_setup_hook(self):
         """봇 setup_hook 테스트"""
-        from bot import IssueMonitorBot
-
-        # Mock 객체로 tree.sync 메서드 대체
         bot = IssueMonitorBot()
 
         # tree.sync를 Mock으로 대체 (비동기 함수)
         async def mock_sync():
-            return None
+            return []
 
         bot.tree.sync = mock_sync
 
@@ -244,18 +197,46 @@ class TestBotIntegration:
         except Exception as e:
             pytest.fail(f"setup_hook 실행 중 오류: {e}")
 
-    @pytest.mark.integration
-    def test_bot_commands_exist(self):
-        """봇 명령어 존재 확인 테스트"""
-        from bot import bot
 
-        # 슬래시 명령어가 등록되어 있는지 확인
-        assert hasattr(bot, 'tree')
+class TestConfigIntegration:
+    """설정 통합 테스트 클래스"""
 
-        # 명령어 함수들이 정의되어 있는지 확인
-        import bot as bot_module
-        assert hasattr(bot_module, 'monitor_command')
-        assert hasattr(bot_module, 'help_command')
+    @pytest.mark.unit
+    def test_config_import(self):
+        """Config 클래스 import 테스트"""
+        try:
+            from src.config import Config, config
+            assert Config is not None
+            assert config is not None
+        except ImportError:
+            pytest.fail("Config 클래스를 import할 수 없습니다")
+
+    @pytest.mark.unit
+    def test_config_basic_attributes(self):
+        """Config 기본 속성 존재 테스트"""
+        from src.config import config
+
+        # 속성이 존재하는지만 확인 (값은 환경에 따라 다를 수 있음)
+        assert hasattr(config, 'get_discord_token')
+        assert hasattr(config, 'get_openai_api_key')
+        assert hasattr(config, 'get_perplexity_api_key')
+        assert hasattr(config, 'is_development_mode')
+
+    @pytest.mark.unit
+    def test_config_with_env_vars(self):
+        """환경변수가 있을 때 Config 로딩 테스트"""
+        with patch.dict(os.environ, {
+            'DISCORD_BOT_TOKEN': 'test_token',
+            'OPENAI_API_KEY': 'test_openai_key',
+            'PERPLEXITY_API_KEY': 'test_perplexity_key'
+        }, clear=True):
+            from src.config import Config
+
+            test_config = Config(load_env_file=False)  # 💡 수정된 부분
+
+            assert test_config.get_discord_token() == 'test_token'
+            assert test_config.get_openai_api_key() == 'test_openai_key'
+            assert test_config.get_perplexity_api_key() == 'test_perplexity_key'
 
 
 if __name__ == "__main__":
