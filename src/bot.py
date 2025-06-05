@@ -10,14 +10,23 @@ from src.config import config
 
 # 키워드 생성기 import
 try:
-    from src.keyword_generator import create_keyword_generator
-
+    from src.keyword_generator import create_keyword_generator, generate_keywords_for_topic
     KEYWORD_GENERATION_AVAILABLE = True
     logger.info("✅ 키워드 생성 모듈 로드 완료")
 except ImportError as e:
     KEYWORD_GENERATION_AVAILABLE = False
     logger.warning(f"⚠️ 키워드 생성 모듈 로드 실패: {e}")
     logger.info("💡 OpenAI 패키지를 설치하고 API 키를 설정해주세요")
+
+# 이슈 검색기 import
+try:
+    from src.issue_searcher import create_issue_searcher, IssueSearcher
+    ISSUE_SEARCH_AVAILABLE = True
+    logger.info("✅ 이슈 검색 모듈 로드 완료")
+except ImportError as e:
+    ISSUE_SEARCH_AVAILABLE = False
+    logger.warning(f"⚠️ 이슈 검색 모듈 로드 실패: {e}")
+    logger.info("💡 Perplexity API 키를 설정하고 httpx 패키지를 설치해주세요")
 
 # logs 디렉토리 생성
 os.makedirs("logs", exist_ok=True)
@@ -415,7 +424,7 @@ async def monitor_command(
 
 @bot.tree.command(name="help", description="봇 사용법을 안내합니다")
 async def help_command(interaction: discord.Interaction):
-    """도움말 명령어"""
+    """도움말 명령어 - 3단계 지원"""
     user = interaction.user
     guild = interaction.guild
     logger.info(f"❓ /help 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
@@ -453,18 +462,38 @@ async def help_command(interaction: discord.Interaction):
     if current_stage >= 2:
         stage_features += "✅ **2단계**: LLM 기반 키워드 자동 생성\n"
     if current_stage >= 3:
-        stage_features += "✅ **3단계**: 실시간 이슈 검색\n"
+        stage_features += "✅ **3단계**: Perplexity API 실시간 이슈 검색\n"
     else:
         stage_features += "⏳ **3단계**: 실시간 이슈 검색 (준비 중)\n"
 
-    stage_features += "⏳ **4단계**: 신뢰도 검증 (예정)\n"
-    stage_features += "⏳ **5단계**: 구조화된 보고서 생성 (예정)"
+    stage_features += "⏳ **4단계**: 세부 정보 수집 (예정)\n"
+    stage_features += "⏳ **5단계**: 신뢰도 검증 (예정)\n"
+    stage_features += "⏳ **6단계**: 구조화된 보고서 생성 (예정)"
 
     embed.add_field(
         name="⚡ 단계별 기능",
         value=stage_features,
         inline=False
     )
+
+    # 사용 예시
+    if current_stage >= 3:
+        embed.add_field(
+            name="💡 사용 예시",
+            value="```\n/monitor 주제:AI 기술 발전 기간:1주일\n```\n"
+                  "→ AI 관련 키워드 자동 생성\n"
+                  "→ 최근 1주일 이슈 검색\n"
+                  "→ 관련성 점수로 정렬된 결과 제공",
+            inline=False
+        )
+    elif current_stage >= 2:
+        embed.add_field(
+            name="💡 현재 사용 가능",
+            value="```\n/monitor 주제:AI 기술 발전 기간:1주일\n```\n"
+                  "→ AI 관련 키워드 자동 생성\n"
+                  "→ 이슈 검색은 Perplexity API 키 설정 후 사용 가능",
+            inline=False
+        )
 
     embed.set_footer(text="문의사항이 있으시면 개발자에게 연락해주세요")
 
@@ -474,7 +503,7 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="status", description="봇 시스템 상태를 확인합니다")
 async def status_command(interaction: discord.Interaction):
-    """시스템 상태 확인 명령어"""
+    """시스템 상태 확인 명령어 - 3단계 지원"""
     user = interaction.user
     guild = interaction.guild
     logger.info(f"📊 /status 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
@@ -485,7 +514,7 @@ async def status_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📊 시스템 상태",
         description=f"현재 실행 가능한 최고 단계: **{current_stage}단계**",
-        color=0x00ff00 if current_stage >= 2 else 0xffaa00,
+        color=0x00ff00 if current_stage >= 3 else (0xffaa00 if current_stage >= 2 else 0xff0000),
         timestamp=datetime.now()
     )
 
@@ -494,6 +523,9 @@ async def status_command(interaction: discord.Interaction):
     status_text += f"{'✅' if stage_info['stage1_discord'] else '❌'} **1단계**: Discord 봇 연결\n"
     status_text += f"{'✅' if stage_info['stage2_openai'] else '❌'} **2단계**: 키워드 생성 (OpenAI)\n"
     status_text += f"{'✅' if stage_info['stage3_perplexity'] else '❌'} **3단계**: 이슈 검색 (Perplexity)\n"
+    status_text += f"⏳ **4단계**: 세부 정보 수집 (예정)\n"
+    status_text += f"⏳ **5단계**: 환각 탐지 및 검증 (예정)\n"
+    status_text += f"⏳ **6단계**: 구조화된 보고서 생성 (예정)"
 
     embed.add_field(
         name="🔧 단계별 준비 상태",
@@ -505,8 +537,9 @@ async def status_command(interaction: discord.Interaction):
     module_status = ""
     module_status += f"✅ Discord.py: 연결됨\n"
     module_status += f"{'✅' if KEYWORD_GENERATION_AVAILABLE else '❌'} 키워드 생성: {'사용 가능' if KEYWORD_GENERATION_AVAILABLE else '설정 필요'}\n"
-    module_status += f"⏳ Perplexity API: 준비 중\n"
-    module_status += f"⏳ 환각 탐지: 준비 중"
+    module_status += f"{'✅' if ISSUE_SEARCH_AVAILABLE else '❌'} 이슈 검색: {'사용 가능' if ISSUE_SEARCH_AVAILABLE else '설정 필요'}\n"
+    module_status += f"⏳ 환각 탐지: 준비 중\n"
+    module_status += f"⏳ 보고서 생성: 준비 중"
 
     embed.add_field(
         name="📦 모듈 상태",
@@ -527,12 +560,16 @@ async def status_command(interaction: discord.Interaction):
     )
 
     # 다음 단계 안내
-    if current_stage < 3:
+    if current_stage < 6:
         next_step = ""
-        if current_stage < 2:
+        if current_stage < 1:
+            next_step = "Discord 봇 토큰을 .env 파일에 추가하여 봇을 활성화하세요."
+        elif current_stage < 2:
             next_step = "OpenAI API 키를 .env 파일에 추가하여 키워드 생성 기능을 활성화하세요."
         elif current_stage < 3:
             next_step = "Perplexity API 키를 .env 파일에 추가하여 이슈 검색 기능을 활성화하세요."
+        else:
+            next_step = "현재 3단계까지 구현되었습니다. 4-6단계는 개발 예정입니다."
 
         embed.add_field(
             name="💡 다음 단계",
@@ -540,11 +577,37 @@ async def status_command(interaction: discord.Interaction):
             inline=False
         )
 
+    # API 키 상태 (마스킹)
+    api_status = ""
+    discord_token = config.get_discord_token()
+    openai_key = config.get_openai_api_key()
+    perplexity_key = config.get_perplexity_api_key()
+
+    if discord_token:
+        api_status += f"🔑 Discord: {discord_token[:8]}...{discord_token[-4:] if len(discord_token) > 12 else '***'}\n"
+    else:
+        api_status += f"❌ Discord: 설정되지 않음\n"
+
+    if openai_key:
+        api_status += f"🔑 OpenAI: {openai_key[:8]}...{openai_key[-4:] if len(openai_key) > 12 else '***'}\n"
+    else:
+        api_status += f"❌ OpenAI: 설정되지 않음\n"
+
+    if perplexity_key:
+        api_status += f"🔑 Perplexity: {perplexity_key[:8]}...{perplexity_key[-4:] if len(perplexity_key) > 12 else '***'}\n"
+    else:
+        api_status += f"❌ Perplexity: 설정되지 않음\n"
+
+    embed.add_field(
+        name="🔐 API 키 상태",
+        value=api_status,
+        inline=False
+    )
+
     embed.set_footer(text=f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     await interaction.response.send_message(embed=embed)
     logger.info(f"📤 상태 확인 응답 전송 완료 (사용자: {user.name})")
-
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -557,11 +620,36 @@ async def on_command_error(ctx, error):
     await ctx.send(f"❌ 오류가 발생했습니다: {error}")
 
 
+def check_module_availability():
+    """모듈 가용성 확인 및 로깅"""
+    modules_status = {
+        "discord.py": True,  # 이미 import 성공
+        "keyword_generation": KEYWORD_GENERATION_AVAILABLE,
+        "issue_search": ISSUE_SEARCH_AVAILABLE,
+    }
+
+    logger.info("📦 모듈 가용성 확인:")
+    for module, available in modules_status.items():
+        status = "✅ 사용 가능" if available else "❌ 사용 불가"
+        logger.info(f"  {module}: {status}")
+
+    # 권장사항 출력
+    if not KEYWORD_GENERATION_AVAILABLE:
+        logger.info("💡 키워드 생성 기능 활성화: pip install openai && OPENAI_API_KEY 설정")
+
+    if not ISSUE_SEARCH_AVAILABLE:
+        logger.info("💡 이슈 검색 기능 활성화: pip install httpx && PERPLEXITY_API_KEY 설정")
+
+    return modules_status
+
 def run_bot():
-    """봇 실행 함수"""
+    """봇 실행 함수 - 3단계 지원"""
     try:
         # 설정 로드 및 검증
         logger.info("🔧 설정 로딩 중...")
+
+        # 모듈 가용성 확인
+        modules_status = check_module_availability()
 
         # 기본 설정 상태 출력
         if config.is_development_mode():
@@ -579,16 +667,34 @@ def run_bot():
         logger.info(f"🔑 Discord 토큰 로드됨: {token_preview}")
 
         # 키워드 생성 기능 상태 확인
-        if config.validate_stage2_requirements():
+        if config.validate_stage2_requirements() and KEYWORD_GENERATION_AVAILABLE:
             logger.success("✅ 키워드 생성 기능 사용 가능")
         else:
-            logger.warning("⚠️ 키워드 생성 기능 사용 불가 - OpenAI API 키 설정 필요")
+            logger.warning("⚠️ 키워드 생성 기능 사용 불가")
+            if not config.get_openai_api_key():
+                logger.info("💡 OpenAI API 키 설정 필요")
+            if not KEYWORD_GENERATION_AVAILABLE:
+                logger.info("💡 OpenAI 패키지 설치 필요: pip install openai")
 
         # 이슈 검색 기능 상태 확인
-        if config.validate_stage3_requirements():
+        if config.validate_stage3_requirements() and ISSUE_SEARCH_AVAILABLE:
             logger.success("✅ 이슈 검색 기능 사용 가능")
         else:
-            logger.info("💡 이슈 검색 기능 사용을 위해서는 Perplexity API 키 설정이 필요합니다")
+            logger.info("⚠️ 이슈 검색 기능 사용 불가")
+            if not config.get_perplexity_api_key():
+                logger.info("💡 Perplexity API 키 설정 필요")
+            if not ISSUE_SEARCH_AVAILABLE:
+                logger.info("💡 httpx 패키지 설치 필요: pip install httpx")
+
+        # 최종 실행 가능 단계 확인
+        final_stage = config.get_current_stage()
+        if KEYWORD_GENERATION_AVAILABLE and final_stage >= 2:
+            if ISSUE_SEARCH_AVAILABLE and final_stage >= 3:
+                logger.success(f"🚀 {final_stage}단계까지 모든 기능 사용 가능")
+            else:
+                logger.info(f"⚡ {final_stage}단계까지 사용 가능 (이슈 검색 제외)")
+        else:
+            logger.info(f"⚡ {final_stage}단계까지 사용 가능")
 
         logger.info("🚀 Discord 봇 시작 중...")
         bot.run(discord_token, log_handler=None)  # Discord.py 로그 비활성화
