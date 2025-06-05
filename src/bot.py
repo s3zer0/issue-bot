@@ -6,7 +6,7 @@ import re
 import sys
 import os
 from loguru import logger
-from src.config import config
+from config import config
 
 # 키워드 생성기 import
 try:
