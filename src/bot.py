@@ -5,12 +5,14 @@ from datetime import datetime, timedelta
 import re
 import sys
 import os
+import tempfile
 from loguru import logger
 from config import config
 
 # 키워드 생성기 import
 try:
     from src.keyword_generator import create_keyword_generator, generate_keywords_for_topic
+
     KEYWORD_GENERATION_AVAILABLE = True
     logger.info("✅ 키워드 생성 모듈 로드 완료")
 except ImportError as e:
@@ -18,11 +20,17 @@ except ImportError as e:
     logger.warning(f"⚠️ 키워드 생성 모듈 로드 실패: {e}")
     logger.info("💡 OpenAI 패키지를 설치하고 API 키를 설정해주세요")
 
-# 이슈 검색기 import
+# 이슈 검색기 import (4단계 포함)
 try:
-    from src.issue_searcher import create_issue_searcher, IssueSearcher
+    from src.issue_searcher import (
+        create_issue_searcher,
+        IssueSearcher,
+        search_issues_for_keywords,
+        create_detailed_report_from_search_result
+    )
+
     ISSUE_SEARCH_AVAILABLE = True
-    logger.info("✅ 이슈 검색 모듈 로드 완료")
+    logger.info("✅ 이슈 검색 모듈 로드 완료 (4단계 세부 정보 수집 지원)")
 except ImportError as e:
     ISSUE_SEARCH_AVAILABLE = False
     logger.warning(f"⚠️ 이슈 검색 모듈 로드 실패: {e}")
@@ -202,17 +210,19 @@ def validate_period(period: str) -> bool:
 async def monitor_command(
         interaction: discord.Interaction,
         주제: str,
-        기간: str = "1주일"
+        기간: str = "1주일",
+        세부분석: bool = True  # 4단계 세부 정보 수집 옵션 추가
 ):
     """
-    이슈 모니터링 메인 명령어
-    /monitor 주제:<주제> 기간:<기간>
+    이슈 모니터링 메인 명령어 - 4단계 지원
+    /monitor 주제:<주제> 기간:<기간> 세부분석:<True/False>
     """
     user = interaction.user
     guild = interaction.guild
-    logger.info(f"📝 /monitor 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}, 주제='{주제}', 기간='{기간}'")
+    logger.info(
+        f"📝 /monitor 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}, 주제='{주제}', 기간='{기간}', 세부분석={세부분석}")
 
-    await interaction.response.defer(thinking=True)  # 처리 시간이 길 수 있으므로
+    await interaction.response.defer(thinking=True)
 
     try:
         # 입력값 검증 및 파싱
@@ -225,23 +235,30 @@ async def monitor_command(
             return
 
         start_date, period_description = parse_time_period(기간)
-        logger.info(f"✅ 입력값 검증 완료: 주제='{주제}', 기간='{period_description}'")
+        logger.info(f"✅ 입력값 검증 완료: 주제='{주제}', 기간='{period_description}', 세부분석={세부분석}")
 
         # 현재 구현 가능한 단계 확인
         available_stage = config.get_current_stage()
 
-        # 초기 응답 (임베드로 정보 정리)
+        # 초기 응답 (4단계 정보 포함)
         embed = discord.Embed(
             title="🔍 이슈 모니터링 시작",
-            description=f"**주제**: {주제}\n**기간**: {period_description}\n**구현 단계**: {available_stage}단계",
+            description=f"**주제**: {주제}\n**기간**: {period_description}\n**세부분석**: {'활성화' if 세부분석 else '비활성화'}\n**구현 단계**: {available_stage}단계",
             color=0x00ff00,
             timestamp=datetime.now()
         )
 
-        if available_stage >= 2:
-            progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 상세 정보 수집 대기\n⬜ 보고서 생성 대기\n```"
+        if available_stage >= 4:
+            if 세부분석:
+                progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```"
+            else:
+                progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⚠️ 세부 정보 수집 건너뜀\n⬜ 보고서 생성 대기\n```"
+        elif available_stage >= 3:
+            progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⏳ 세부 정보 수집 준비 중\n⬜ 보고서 생성 대기\n```"
+        elif available_stage >= 2:
+            progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```"
         else:
-            progress_text = "```\n⚠️ 키워드 생성 기능 준비 중...\n⬜ 이슈 검색 미구현\n⬜ 상세 정보 수집 미구현\n⬜ 보고서 생성 미구현\n```"
+            progress_text = "```\n⚠️ 키워드 생성 기능 준비 중...\n⬜ 이슈 검색 미구현\n⬜ 세부 정보 수집 미구현\n⬜ 보고서 생성 미구현\n```"
 
         embed.add_field(
             name="📊 진행 상황",
@@ -249,15 +266,17 @@ async def monitor_command(
             inline=False
         )
 
-        if available_stage >= 2:
+        if available_stage >= 4 and 세부분석:
+            embed.set_footer(text="예상 소요 시간: 2-5분 (세부 분석 포함)")
+        elif available_stage >= 3:
             embed.set_footer(text="예상 소요 시간: 1-3분")
         else:
-            embed.set_footer(text="설정 완료 후 키워드 생성이 가능합니다")
+            embed.set_footer(text="설정 완료 후 기능 사용이 가능합니다")
 
         await interaction.followup.send(embed=embed)
         logger.info(f"📤 초기 응답 전송 완료 (사용자: {user.name})")
 
-        # 단계별 처리
+        # 단계별 처리 (4단계까지 지원)
         if available_stage >= 2 and KEYWORD_GENERATION_AVAILABLE:
             # 1단계: LLM 키워드 생성
             try:
@@ -266,64 +285,235 @@ async def monitor_command(
                 # 진행상황 업데이트
                 embed.set_field_at(0,
                                    name="📊 진행 상황",
-                                   value="```\n✅ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 상세 정보 수집 대기\n⬜ 보고서 생성 대기\n```",
+                                   value="```\n✅ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```",
                                    inline=False
                                    )
                 await interaction.edit_original_response(embed=embed)
 
                 # 키워드 생성 실행
                 keyword_result = await generate_keywords_for_topic(주제)
-
                 logger.success(f"키워드 생성 완료: {len(keyword_result.primary_keywords)}개 핵심 키워드")
 
-                # 완료 상태 업데이트
-                embed.set_field_at(0,
-                                   name="📊 진행 상황",
-                                   value="```\n✅ 키워드 생성 완료\n⏳ 이슈 검색 준비 중...\n⬜ 상세 정보 수집 대기\n⬜ 보고서 생성 대기\n```",
-                                   inline=False
-                                   )
+                # 2단계: 이슈 검색 (3단계 이상에서 실행)
+                if available_stage >= 3 and ISSUE_SEARCH_AVAILABLE:
+                    # 진행상황 업데이트
+                    embed.set_field_at(0,
+                                       name="📊 진행 상황",
+                                       value="```\n✅ 키워드 생성 완료\n⏳ 이슈 검색 중...\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```",
+                                       inline=False
+                                       )
+                    await interaction.edit_original_response(embed=embed)
 
-                # 키워드 결과 추가
-                keyword_summary = keyword_generator.format_keywords_summary(keyword_result)
+                    logger.info(f"3단계 시작: 이슈 검색 (세부분석: {세부분석})")
 
-                embed.add_field(
-                    name="🎯 생성된 키워드",
-                    value=keyword_summary,
-                    inline=False
-                )
+                    # 이슈 검색 실행 (4단계 세부 정보 수집 포함)
+                    search_result = await search_issues_for_keywords(
+                        keyword_result,
+                        period_description,
+                        collect_details=세부분석 and available_stage >= 4
+                    )
 
-                await interaction.edit_original_response(embed=embed)
+                    logger.success(
+                        f"이슈 검색 완료: {search_result.total_found}개 이슈, 세부분석 {search_result.detailed_issues_count}개")
 
-                # TODO: 2단계 - Perplexity API 이슈 탐색 (다음 구현)
-                # TODO: 3단계 - 세부 정보 수집 (다음 구현)
-                # TODO: 4단계 - 환각 탐지 (다음 구현)
-                # TODO: 5단계 - 보고서 생성 (다음 구현)
+                    # 4단계 세부 정보 수집 상태 업데이트
+                    if 세부분석 and available_stage >= 4:
+                        embed.set_field_at(0,
+                                           name="📊 진행 상황",
+                                           value="```\n✅ 키워드 생성 완료\n✅ 이슈 검색 완료\n✅ 세부 정보 수집 완료\n⏳ 보고서 생성 중...\n```",
+                                           inline=False
+                                           )
+                    else:
+                        embed.set_field_at(0,
+                                           name="📊 진행 상황",
+                                           value="```\n✅ 키워드 생성 완료\n✅ 이슈 검색 완료\n⚠️ 세부 정보 수집 건너뜀\n⏳ 보고서 생성 중...\n```",
+                                           inline=False
+                                           )
 
-                # 임시 완료 메시지 (2단계 완료 후)
-                logger.info("⏳ 다음 단계 대기 중 (Perplexity API 연동 예정)")
-                await asyncio.sleep(1)  # 시뮬레이션
+                    # 키워드 결과 추가
+                    keyword_summary = create_keyword_generator().format_keywords_summary(keyword_result)
+                    embed.add_field(
+                        name="🎯 생성된 키워드",
+                        value=keyword_summary,
+                        inline=False
+                    )
 
-                success_embed = discord.Embed(
-                    title="✅ 2단계 완료: 키워드 생성",
-                    description=f"주제 '{주제}'에 대한 키워드 생성이 완료되었습니다.",
-                    color=0x00ff00
-                )
-                success_embed.add_field(
-                    name="📈 다음 단계 예정",
-                    value="3단계: Perplexity API를 통한 이슈 검색\n4단계: 세부 정보 수집\n5단계: 환각 탐지 및 검증\n6단계: 보고서 생성 및 전송",
-                    inline=False
-                )
+                    # 이슈 검색 결과 추가
+                    search_summary = create_issue_searcher().format_search_summary(search_result)
+                    embed.add_field(
+                        name="🔍 검색 결과",
+                        value=search_summary[:1024],  # Discord 필드 길이 제한
+                        inline=False
+                    )
 
-                total_keywords = len(keyword_generator.get_all_keywords(keyword_result))
-                success_embed.add_field(
-                    name="🔗 생성된 키워드 활용",
-                    value=f"총 {total_keywords}개 키워드가 다음 단계 검색에 사용됩니다.\n소요시간: {keyword_result.generation_time:.1f}초",
-                    inline=False
-                )
+                    await interaction.edit_original_response(embed=embed)
 
-                await interaction.followup.send(embed=success_embed)
+                    # 최종 완료 메시지
+                    stage_text = "4단계" if (세부분석 and available_stage >= 4) else "3단계"
+                    success_embed = discord.Embed(
+                        title=f"✅ {stage_text} 완료: 이슈 모니터링",
+                        description=f"주제 '{주제}'에 대한 이슈 모니터링이 완료되었습니다.",
+                        color=0x00ff00
+                    )
 
-            except KeywordGenerationError as e:
+                    # 결과 요약
+                    result_summary = f"📊 **검색 결과**\n"
+                    result_summary += f"• 총 {search_result.total_found}개 이슈 발견\n"
+                    result_summary += f"• 검색 신뢰도: {int(search_result.confidence_score * 100)}%\n"
+                    result_summary += f"• 소요 시간: {search_result.search_time:.1f}초\n"
+
+                    if search_result.detailed_issues_count > 0:
+                        result_summary += f"• 세부 분석: {search_result.detailed_issues_count}개 이슈\n"
+                        result_summary += f"• 세부 신뢰도: {int(search_result.average_detail_confidence * 100)}%\n"
+                        result_summary += f"• 세부 분석 시간: {search_result.total_detail_collection_time:.1f}초\n"
+
+                    success_embed.add_field(
+                        name="📈 분석 결과",
+                        value=result_summary,
+                        inline=False
+                    )
+
+                    # 상위 이슈 미리보기
+                    if search_result.issues:
+                        preview_text = ""
+                        for i, issue in enumerate(search_result.issues[:3], 1):
+                            preview_text += f"**{i}. {issue.title[:50]}{'...' if len(issue.title) > 50 else ''}**\n"
+                            preview_text += f"📰 {issue.source} | 관련도: {int(issue.relevance_score * 100)}%"
+
+                            if issue.detail_confidence and issue.detail_confidence > 0:
+                                preview_text += f" | 세부: {int(issue.detail_confidence * 100)}%"
+
+                            preview_text += "\n"
+
+                            # 영향도 표시 (4단계 정보)
+                            if issue.impact_analysis:
+                                impact_emoji = {
+                                    "low": "🟢", "medium": "🟡",
+                                    "high": "🟠", "critical": "🔴"
+                                }.get(issue.impact_analysis.impact_level, "⚪")
+                                preview_text += f"{impact_emoji} 영향도: {issue.impact_analysis.impact_level}"
+                                if issue.impact_analysis.affected_sectors:
+                                    preview_text += f" ({', '.join(issue.impact_analysis.affected_sectors[:2])})"
+                                preview_text += "\n"
+
+                            # 관련 인물/기관 표시 (4단계 정보)
+                            if issue.related_entities:
+                                top_entities = [e.name for e in
+                                                sorted(issue.related_entities, key=lambda x: x.relevance, reverse=True)[
+                                                :2]]
+                                preview_text += f"👥 관련: {', '.join(top_entities)}\n"
+
+                            preview_text += "\n"
+
+                        success_embed.add_field(
+                            name="🔝 주요 이슈 미리보기",
+                            value=preview_text[:1024],  # Discord 제한
+                            inline=False
+                        )
+
+                    # 상세 보고서 생성 및 파일 첨부 (4단계에서 세부 정보가 있는 경우)
+                    if search_result.detailed_issues_count > 0:
+                        try:
+                            # 상세 보고서 생성
+                            detailed_report = create_detailed_report_from_search_result(search_result)
+
+                            # 임시 파일로 저장
+                            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False,
+                                                             encoding='utf-8') as f:
+                                f.write(detailed_report)
+                                temp_file_path = f.name
+
+                            # Discord 파일 첨부
+                            filename = f"issue_report_{주제.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+
+                            success_embed.add_field(
+                                name="📋 상세 보고서",
+                                value=f"세부 분석된 {search_result.detailed_issues_count}개 이슈에 대한 상세 보고서가 첨부되었습니다.",
+                                inline=False
+                            )
+
+                            # 파일과 함께 전송
+                            with open(temp_file_path, 'rb') as f:
+                                discord_file = discord.File(f, filename=filename)
+                                await interaction.followup.send(embed=success_embed, file=discord_file)
+
+                            # 임시 파일 정리
+                            os.unlink(temp_file_path)
+
+                            logger.success(f"상세 보고서 첨부 완료: {filename}")
+
+                        except Exception as e:
+                            logger.error(f"상세 보고서 생성 실패: {e}")
+                            # 파일 첨부 실패 시 일반 메시지만 전송
+                            await interaction.followup.send(embed=success_embed)
+                    else:
+                        # 세부 정보가 없는 경우 일반 메시지 전송
+                        await interaction.followup.send(embed=success_embed)
+
+                    # 다음 단계 안내 (5-6단계 예정)
+                    if available_stage < 6:
+                        next_steps_embed = discord.Embed(
+                            title="🚀 다음 단계 예정",
+                            description="이슈 모니터링 시스템의 향후 업데이트 계획",
+                            color=0x3498db
+                        )
+
+                        if available_stage < 5:
+                            next_steps_embed.add_field(
+                                name="5단계: 환각 탐지 및 검증",
+                                value="• Semantic Uncertainty 분석\n• Self-Consistency Check\n• External Fact-Checking\n• 자동 재검색 메커니즘",
+                                inline=False
+                            )
+
+                        if available_stage < 6:
+                            next_steps_embed.add_field(
+                                name="6단계: 고급 보고서 생성",
+                                value="• 시간순 타임라인 시각화\n• 영향도 매트릭스\n• 트렌드 분석\n• PDF 보고서 자동 생성",
+                                inline=False
+                            )
+
+                        next_steps_embed.set_footer(text="지속적인 업데이트를 통해 더욱 정확하고 유용한 서비스를 제공하겠습니다.")
+                        await interaction.followup.send(embed=next_steps_embed)
+
+                else:
+                    # 3단계 미지원 안내
+                    embed.set_field_at(0,
+                                       name="📊 진행 상황",
+                                       value="```\n✅ 키워드 생성 완료\n⚠️ 이슈 검색 기능 준비 중\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```",
+                                       inline=False
+                                       )
+
+                    # 키워드 결과만 표시
+                    keyword_summary = create_keyword_generator().format_keywords_summary(keyword_result)
+                    embed.add_field(
+                        name="🎯 생성된 키워드",
+                        value=keyword_summary,
+                        inline=False
+                    )
+
+                    await interaction.edit_original_response(embed=embed)
+
+                    limitation_embed = discord.Embed(
+                        title="⚠️ 기능 제한 (2단계까지 완료)",
+                        description="키워드 생성은 완료되었으나, 이슈 검색을 위해 추가 설정이 필요합니다.",
+                        color=0xffaa00
+                    )
+
+                    limitation_embed.add_field(
+                        name="💡 다음 단계 진행 방법",
+                        value="`.env` 파일에 `PERPLEXITY_API_KEY=your_key_here`를 추가하고 봇을 재시작하세요.",
+                        inline=False
+                    )
+
+                    limitation_embed.add_field(
+                        name="🎯 생성된 키워드 활용",
+                        value=f"총 {len(create_keyword_generator().get_all_keywords(keyword_result))}개 키워드가 생성되어 향후 검색에 사용됩니다.",
+                        inline=False
+                    )
+
+                    await interaction.followup.send(embed=limitation_embed)
+
+            except Exception as e:
                 logger.error(f"키워드 생성 실패: {e}")
 
                 error_embed = discord.Embed(
@@ -346,7 +536,7 @@ async def monitor_command(
                 return
 
         else:
-            # 단계별 제한 안내
+            # 단계별 제한 안내 (1단계만 가능)
             logger.info(f"⚠️ 현재 단계 제한: {available_stage}단계 (사용자: {user.name})")
 
             limitation_embed = discord.Embed(
@@ -373,6 +563,8 @@ async def monitor_command(
             else:
                 setup_guide += "✅ **3단계**: 이슈 검색 기능 사용 가능\n"
 
+            setup_guide += "🚀 **4단계**: 세부 정보 수집 기능 구현 완료\n"
+
             limitation_embed.add_field(
                 name="🔧 설정 상태",
                 value=setup_guide,
@@ -385,20 +577,32 @@ async def monitor_command(
                     value="`.env` 파일에 `OPENAI_API_KEY=your_key_here`를 추가하고 봇을 재시작하세요.",
                     inline=False
                 )
+            elif available_stage == 2:
+                limitation_embed.add_field(
+                    name="💡 다음 단계 진행 방법",
+                    value="`.env` 파일에 `PERPLEXITY_API_KEY=your_key_here`를 추가하고 봇을 재시작하세요.",
+                    inline=False
+                )
 
-            # 현재 구현된 기능만 시뮬레이션
-            await asyncio.sleep(2)
+            # 현재 구현된 기능 상태
+            feature_status = f"• 입력값 검증: ✅\n• 시간 파싱: ✅\n"
+            feature_status += f"• 키워드 생성: {'✅' if available_stage >= 2 else '⏳'}\n"
+            feature_status += f"• 이슈 검색: {'✅' if available_stage >= 3 else '⏳'}\n"
+            feature_status += f"• 세부 정보 수집: {'✅' if available_stage >= 4 else '⏳'}\n"
+            feature_status += f"• 환각 탐지: ⏳ (5단계 예정)\n"
+            feature_status += f"• 고급 보고서: ⏳ (6단계 예정)"
 
             limitation_embed.add_field(
                 name="🚧 현재 구현 상태",
-                value=f"• 입력값 검증: ✅\n• 시간 파싱: ✅\n• 키워드 생성: {'✅' if available_stage >= 2 else '⏳'}\n• 이슈 검색: ⏳\n• 보고서 생성: ⏳",
+                value=feature_status,
                 inline=False
             )
 
             await interaction.followup.send(embed=limitation_embed)
 
         # 로깅
-        logger.info(f"📊 Monitor 명령어 완료 - 주제: {주제}, 기간: {period_description}, 사용자: {user.name}, 단계: {available_stage}")
+        logger.info(
+            f"📊 Monitor 명령어 완료 - 주제: {주제}, 기간: {period_description}, 세부분석: {세부분석}, 사용자: {user.name}, 단계: {available_stage}")
 
     except Exception as e:
         logger.error(f"💥 monitor 명령어 실행 중 오류: {e}", exc_info=True)
@@ -424,7 +628,7 @@ async def monitor_command(
 
 @bot.tree.command(name="help", description="봇 사용법을 안내합니다")
 async def help_command(interaction: discord.Interaction):
-    """도움말 명령어 - 3단계 지원"""
+    """도움말 명령어 - 4단계 지원"""
     user = interaction.user
     guild = interaction.guild
     logger.info(f"❓ /help 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
@@ -439,7 +643,7 @@ async def help_command(interaction: discord.Interaction):
 
     embed.add_field(
         name="📋 기본 명령어",
-        value="```\n/monitor 주제:<주제명> 기간:<기간>\n/help - 이 도움말\n/status - 시스템 상태 확인\n```",
+        value="```\n/monitor 주제:<주제명> 기간:<기간> 세부분석:<True/False>\n/help - 이 도움말\n/status - 시스템 상태 확인\n```",
         inline=False
     )
 
@@ -463,10 +667,11 @@ async def help_command(interaction: discord.Interaction):
         stage_features += "✅ **2단계**: LLM 기반 키워드 자동 생성\n"
     if current_stage >= 3:
         stage_features += "✅ **3단계**: Perplexity API 실시간 이슈 검색\n"
+    if current_stage >= 4:
+        stage_features += "✅ **4단계**: 세부 정보 수집 및 분석\n"
     else:
-        stage_features += "⏳ **3단계**: 실시간 이슈 검색 (준비 중)\n"
+        stage_features += "⏳ **4단계**: 세부 정보 수집 (구현 완료)\n"
 
-    stage_features += "⏳ **4단계**: 세부 정보 수집 (예정)\n"
     stage_features += "⏳ **5단계**: 신뢰도 검증 (예정)\n"
     stage_features += "⏳ **6단계**: 구조화된 보고서 생성 (예정)"
 
@@ -476,8 +681,32 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
 
+    # 4단계 세부 기능 안내
+    if current_stage >= 4:
+        detail_features = ""
+        detail_features += "🔍 **관련 인물/기관**: 이슈 관련 핵심 인물과 기관 추출\n"
+        detail_features += "📊 **영향도 분석**: 파급효과 및 지리적 범위 평가\n"
+        detail_features += "⏰ **시간순 전개**: 이슈 발전 과정 추적\n"
+        detail_features += "📋 **상세 보고서**: 마크다운 파일 자동 생성"
+
+        embed.add_field(
+            name="🚀 4단계 세부 기능",
+            value=detail_features,
+            inline=False
+        )
+
     # 사용 예시
-    if current_stage >= 3:
+    if current_stage >= 4:
+        embed.add_field(
+            name="💡 사용 예시",
+            value="```\n/monitor 주제:AI 기술 발전 기간:1주일 세부분석:True\n```\n"
+                  "→ AI 관련 키워드 자동 생성\n"
+                  "→ 최근 1주일 이슈 검색\n"
+                  "→ 관련 인물/기관 및 영향도 분석\n"
+                  "→ 상세 보고서 파일 제공",
+            inline=False
+        )
+    elif current_stage >= 3:
         embed.add_field(
             name="💡 사용 예시",
             value="```\n/monitor 주제:AI 기술 발전 기간:1주일\n```\n"
@@ -503,7 +732,7 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="status", description="봇 시스템 상태를 확인합니다")
 async def status_command(interaction: discord.Interaction):
-    """시스템 상태 확인 명령어 - 3단계 지원"""
+    """시스템 상태 확인 명령어 - 4단계 지원"""
     user = interaction.user
     guild = interaction.guild
     logger.info(f"📊 /status 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
@@ -514,16 +743,17 @@ async def status_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📊 시스템 상태",
         description=f"현재 실행 가능한 최고 단계: **{current_stage}단계**",
-        color=0x00ff00 if current_stage >= 3 else (0xffaa00 if current_stage >= 2 else 0xff0000),
+        color=0x00ff00 if current_stage >= 4 else (
+            0x3498db if current_stage >= 3 else (0xffaa00 if current_stage >= 2 else 0xff0000)),
         timestamp=datetime.now()
     )
 
-    # 단계별 상태
+    # 단계별 상태 (4단계까지)
     status_text = ""
     status_text += f"{'✅' if stage_info['stage1_discord'] else '❌'} **1단계**: Discord 봇 연결\n"
     status_text += f"{'✅' if stage_info['stage2_openai'] else '❌'} **2단계**: 키워드 생성 (OpenAI)\n"
     status_text += f"{'✅' if stage_info['stage3_perplexity'] else '❌'} **3단계**: 이슈 검색 (Perplexity)\n"
-    status_text += f"⏳ **4단계**: 세부 정보 수집 (예정)\n"
+    status_text += f"{'✅' if current_stage >= 4 else '⏳'} **4단계**: 세부 정보 수집 (확장됨)\n"
     status_text += f"⏳ **5단계**: 환각 탐지 및 검증 (예정)\n"
     status_text += f"⏳ **6단계**: 구조화된 보고서 생성 (예정)"
 
@@ -533,13 +763,29 @@ async def status_command(interaction: discord.Interaction):
         inline=False
     )
 
+    # 4단계 기능 상세 정보
+    if current_stage >= 4:
+        detail_features = ""
+        detail_features += "🔍 **세부 정보 수집**: 관련 인물/기관 추출\n"
+        detail_features += "📊 **영향도 분석**: 파급효과 및 중요도 평가\n"
+        detail_features += "⏰ **시간순 전개**: 이슈 발전 과정 추적\n"
+        detail_features += "🎯 **신뢰도 계산**: 세부 정보 품질 평가\n"
+        detail_features += "📋 **상세 보고서**: 마크다운 파일 자동 생성"
+
+        embed.add_field(
+            name="🚀 4단계 세부 기능",
+            value=detail_features,
+            inline=False
+        )
+
     # 모듈 상태
     module_status = ""
     module_status += f"✅ Discord.py: 연결됨\n"
     module_status += f"{'✅' if KEYWORD_GENERATION_AVAILABLE else '❌'} 키워드 생성: {'사용 가능' if KEYWORD_GENERATION_AVAILABLE else '설정 필요'}\n"
     module_status += f"{'✅' if ISSUE_SEARCH_AVAILABLE else '❌'} 이슈 검색: {'사용 가능' if ISSUE_SEARCH_AVAILABLE else '설정 필요'}\n"
-    module_status += f"⏳ 환각 탐지: 준비 중\n"
-    module_status += f"⏳ 보고서 생성: 준비 중"
+    module_status += f"{'✅' if current_stage >= 4 else '⏳'} 세부 정보 수집: {'사용 가능' if current_stage >= 4 else '준비 중'}\n"
+    module_status += f"⏳ 환각 탐지: 준비 중 (5단계)\n"
+    module_status += f"⏳ 고급 보고서: 준비 중 (6단계)"
 
     embed.add_field(
         name="📦 모듈 상태",
@@ -551,7 +797,8 @@ async def status_command(interaction: discord.Interaction):
     config_text = ""
     config_text += f"개발 모드: {'ON' if stage_info['development_mode'] else 'OFF'}\n"
     config_text += f"로그 레벨: {stage_info['log_level']}\n"
-    config_text += f"서버 수: {len(bot.guilds)}개"
+    config_text += f"서버 수: {len(bot.guilds)}개\n"
+    config_text += f"4단계 지원: {'✅' if current_stage >= 4 else '❌'}"
 
     embed.add_field(
         name="⚙️ 설정 정보",
@@ -568,8 +815,10 @@ async def status_command(interaction: discord.Interaction):
             next_step = "OpenAI API 키를 .env 파일에 추가하여 키워드 생성 기능을 활성화하세요."
         elif current_stage < 3:
             next_step = "Perplexity API 키를 .env 파일에 추가하여 이슈 검색 기능을 활성화하세요."
+        elif current_stage < 4:
+            next_step = "4단계 세부 정보 수집 기능이 구현되었습니다! 모든 API 키가 설정되면 사용 가능합니다."
         else:
-            next_step = "현재 3단계까지 구현되었습니다. 4-6단계는 개발 예정입니다."
+            next_step = "현재 4단계까지 완전 구현되었습니다. 5-6단계는 개발 예정입니다."
 
         embed.add_field(
             name="💡 다음 단계",
@@ -609,6 +858,7 @@ async def status_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
     logger.info(f"📤 상태 확인 응답 전송 완료 (사용자: {user.name})")
 
+
 @bot.event
 async def on_command_error(ctx, error):
     """명령어 오류 처리"""
@@ -642,8 +892,9 @@ def check_module_availability():
 
     return modules_status
 
+
 def run_bot():
-    """봇 실행 함수 - 3단계 지원"""
+    """봇 실행 함수 - 4단계 지원"""
     try:
         # 설정 로드 및 검증
         logger.info("🔧 설정 로딩 중...")
@@ -690,11 +941,19 @@ def run_bot():
         final_stage = config.get_current_stage()
         if KEYWORD_GENERATION_AVAILABLE and final_stage >= 2:
             if ISSUE_SEARCH_AVAILABLE and final_stage >= 3:
-                logger.success(f"🚀 {final_stage}단계까지 모든 기능 사용 가능")
+                logger.success(f"🚀 {final_stage}단계까지 모든 기능 사용 가능 (4단계 세부 분석 포함)")
             else:
                 logger.info(f"⚡ {final_stage}단계까지 사용 가능 (이슈 검색 제외)")
         else:
             logger.info(f"⚡ {final_stage}단계까지 사용 가능")
+
+        # 4단계 기능 안내
+        if final_stage >= 4:
+            logger.success("🔍 4단계 세부 정보 수집 기능 구현 완료!")
+            logger.info("   • 관련 인물/기관 추출")
+            logger.info("   • 영향도 분석 및 평가")
+            logger.info("   • 시간순 이벤트 추적")
+            logger.info("   • 상세 보고서 자동 생성")
 
         logger.info("🚀 Discord 봇 시작 중...")
         bot.run(discord_token, log_handler=None)  # Discord.py 로그 비활성화
