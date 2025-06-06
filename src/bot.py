@@ -310,14 +310,14 @@ async def monitor_command(
                     search_result = await search_issues_for_keywords(
                         keyword_result,
                         period_description,
-                        collect_details=세부분석 and available_stage >= 4
+                        collect_details=세부분석 and available_stage >= 3
                     )
 
                     logger.success(
                         f"이슈 검색 완료: {search_result.total_found}개 이슈, 세부분석 {search_result.detailed_issues_count}개")
 
                     # 4단계 세부 정보 수집 상태 업데이트
-                    if 세부분석 and available_stage >= 4:
+                    if 세부분석 and available_stage >= 3:
                         embed.set_field_at(0,
                                            name="📊 진행 상황",
                                            value="```\n✅ 키워드 생성 완료\n✅ 이슈 검색 완료\n✅ 세부 정보 수집 완료\n⏳ 보고서 생성 중...\n```",

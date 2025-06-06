@@ -95,7 +95,7 @@ class PerplexityClient:
             raise ValueError("Perplexity API 키가 설정되지 않았습니다")
 
         self.base_url = "https://api.perplexity.ai/chat/completions"
-        self.model = "llama-3.1-sonar-small-128k-online"
+        self.model = "llama-3.1-sonar-large-128k-online"
         self.timeout = 60
         self.max_retries = 3
 
@@ -334,8 +334,8 @@ class IssueSearcher:
 
         # 4단계 설정
         self.enable_detailed_collection = True
-        self.max_detailed_issues = 5  # 세부 정보를 수집할 최대 이슈 수
-        self.detail_collection_timeout = 30  # 각 이슈별 세부 정보 수집 타임아웃
+        self.max_detailed_issues = 10  # 세부 정보를 수집할 최대 이슈 수
+        self.detail_collection_timeout = 60  # 각 이슈별 세부 정보 수집 타임아웃
 
         logger.info("IssueSearcher 초기화 완료 (4단계 세부 정보 수집 지원)")
 
