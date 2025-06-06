@@ -11,7 +11,7 @@ from config import config
 
 # 키워드 생성기 import
 try:
-    from src.keyword_generator import create_keyword_generator, generate_keywords_for_topic
+    from keyword_generator import create_keyword_generator, generate_keywords_for_topic
     KEYWORD_GENERATION_AVAILABLE = True
     logger.info("✅ 키워드 생성 모듈 로드 완료")
 except ImportError as e:
@@ -20,7 +20,7 @@ except ImportError as e:
 
 # 이슈 검색기 import
 try:
-    from src.issue_searcher import (
+    from issue_searcher import (
         create_issue_searcher,
         search_issues_for_keywords,
         create_detailed_report_from_search_result

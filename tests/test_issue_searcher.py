@@ -205,8 +205,8 @@ class TestStage4IssueSearcher:
         assert hasattr(searcher, 'detail_collection_timeout')
 
         assert searcher.enable_detailed_collection == True
-        assert searcher.max_detailed_issues == 5
-        assert searcher.detail_collection_timeout == 30
+        assert searcher.max_detailed_issues == 10
+        assert searcher.detail_collection_timeout == 60
 
     @pytest.mark.unit
     def test_calculate_detail_confidence(self):
@@ -778,7 +778,7 @@ class TestPerplexityClient:
 
         client = PerplexityClient(api_key="test_key")
         assert client.api_key == "test_key"
-        assert client.model == "llama-3.1-sonar-small-128k-online"
+        assert client.model == "llama-3.1-sonar-large-128k-online"
         assert client.base_url == "https://api.perplexity.ai/chat/completions"
         assert "Authorization" in client.headers
         assert "Bearer test_key" in client.headers["Authorization"]
