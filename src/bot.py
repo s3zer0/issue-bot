@@ -12,37 +12,30 @@ from config import config
 # 키워드 생성기 import
 try:
     from src.keyword_generator import create_keyword_generator, generate_keywords_for_topic
-
     KEYWORD_GENERATION_AVAILABLE = True
     logger.info("✅ 키워드 생성 모듈 로드 완료")
 except ImportError as e:
     KEYWORD_GENERATION_AVAILABLE = False
     logger.warning(f"⚠️ 키워드 생성 모듈 로드 실패: {e}")
-    logger.info("💡 OpenAI 패키지를 설치하고 API 키를 설정해주세요")
 
-# 이슈 검색기 import (4단계 포함)
+# 이슈 검색기 import
 try:
     from src.issue_searcher import (
         create_issue_searcher,
-        IssueSearcher,
         search_issues_for_keywords,
         create_detailed_report_from_search_result
     )
-
     ISSUE_SEARCH_AVAILABLE = True
-    logger.info("✅ 이슈 검색 모듈 로드 완료 (4단계 세부 정보 수집 지원)")
+    logger.info("✅ 이슈 검색 모듈 로드 완료")
 except ImportError as e:
     ISSUE_SEARCH_AVAILABLE = False
     logger.warning(f"⚠️ 이슈 검색 모듈 로드 실패: {e}")
-    logger.info("💡 Perplexity API 키를 설정하고 httpx 패키지를 설치해주세요")
 
-# logs 디렉토리 생성
+# 로그 설정
 os.makedirs("logs", exist_ok=True)
+logger.remove()
 
-# 로그 설정 - 실행할 때마다 초기화
-logger.remove()  # 기본 핸들러 제거
-
-# 콘솔 로그 (컬러풀)
+# 콘솔 로그
 logger.add(
     sys.stdout,
     format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
@@ -50,10 +43,10 @@ logger.add(
     colorize=True
 )
 
-# 파일 로그 (실행할 때마다 새로 시작)
+# 파일 로그
 log_file = "logs/bot.log"
 if os.path.exists(log_file):
-    os.remove(log_file)  # 기존 로그 파일 삭제
+    os.remove(log_file)
 
 logger.add(
     log_file,
@@ -62,10 +55,10 @@ logger.add(
     encoding="utf-8"
 )
 
-# 에러만 별도 로그 (실행할 때마다 새로 시작)
+# 에러 로그
 error_log_file = "logs/error.log"
 if os.path.exists(error_log_file):
-    os.remove(error_log_file)  # 기존 에러 로그 파일 삭제
+    os.remove(error_log_file)
 
 logger.add(
     error_log_file,
@@ -75,8 +68,6 @@ logger.add(
 )
 
 logger.info("🚀 봇 시작 중...")
-logger.info(f"📄 로그 파일: {log_file}")
-logger.info(f"📄 에러 로그: {error_log_file}")
 
 # 설정 상태 확인
 current_stage = config.get_current_stage()
@@ -93,7 +84,7 @@ intents.message_content = True
 class IssueMonitorBot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix='!',  # 슬래시 명령어 주로 사용하지만 백업용
+            command_prefix='!',
             intents=intents,
             help_command=None
         )
@@ -103,7 +94,6 @@ class IssueMonitorBot(commands.Bot):
         """봇 시작 시 초기화 작업"""
         logger.info("⚙️ 봇 셋업 시작")
         try:
-            # 슬래시 명령어 동기화
             synced = await self.tree.sync()
             logger.success(f"✅ 슬래시 명령어 동기화 완료: {len(synced)}개 명령어")
         except Exception as e:
@@ -114,7 +104,6 @@ class IssueMonitorBot(commands.Bot):
         logger.success(f"🎉 {self.user}가 Discord에 연결되었습니다!")
         logger.info(f"📊 봇이 {len(self.guilds)}개 서버에 참여 중")
 
-        # 서버 목록 출력
         for guild in self.guilds:
             logger.info(f"  📋 서버: {guild.name} (ID: {guild.id}, 멤버: {guild.member_count}명)")
 
@@ -129,44 +118,33 @@ class IssueMonitorBot(commands.Bot):
         logger.info(f"👀 봇 상태 설정: {status_message}")
 
     async def on_guild_join(self, guild):
-        """새 서버에 참여했을 때"""
         logger.info(f"🆕 새 서버 참여: {guild.name} (ID: {guild.id})")
 
     async def on_guild_remove(self, guild):
-        """서버에서 나갔을 때"""
         logger.info(f"👋 서버 퇴장: {guild.name} (ID: {guild.id})")
 
     async def on_command_error(self, ctx, error):
-        """명령어 오류 처리"""
         logger.error(f"❌ 명령어 오류: {error}")
 
     async def on_error(self, event, *args, **kwargs):
-        """일반 오류 처리"""
         logger.error(f"❌ 이벤트 오류 ({event}): {args}")
 
     async def close(self):
-        """봇 종료"""
         logger.info("🛑 봇 종료 중...")
         await super().close()
 
 
-# 봇 인스턴스 생성
 bot = IssueMonitorBot()
 
 
 def parse_time_period(period_str: str) -> tuple[datetime, str]:
-    """
-    시간 기간 문자열을 파싱하여 시작 날짜와 설명을 반환
-    예: "1주일", "3일", "1개월" 등
-    """
+    """시간 기간 문자열을 파싱하여 시작 날짜와 설명을 반환"""
     period_str = period_str.strip().lower()
     now = datetime.now()
 
-    # 정규식으로 숫자와 단위 추출
     match = re.match(r'(\d+)\s*(일|주일|개월|달|시간)', period_str)
 
     if not match:
-        # 기본값: 1주일
         return now - timedelta(weeks=1), "최근 1주일"
 
     number = int(match.group(1))
@@ -179,7 +157,7 @@ def parse_time_period(period_str: str) -> tuple[datetime, str]:
         start_date = now - timedelta(weeks=number)
         description = f"최근 {number}주일"
     elif unit in ['개월', '달']:
-        start_date = now - timedelta(days=number * 30)  # 대략적인 계산
+        start_date = now - timedelta(days=number * 30)
         description = f"최근 {number}개월"
     elif unit in ['시간']:
         start_date = now - timedelta(hours=number)
@@ -199,7 +177,7 @@ def validate_topic(topic: str) -> bool:
 def validate_period(period: str) -> bool:
     """기간 입력값 검증"""
     if not period:
-        return True  # 기본값 사용
+        return True
 
     import re
     pattern = r'(\d+)\s*(일|주일|개월|달|시간)'
@@ -211,21 +189,18 @@ async def monitor_command(
         interaction: discord.Interaction,
         주제: str,
         기간: str = "1주일",
-        세부분석: bool = True  # 4단계 세부 정보 수집 옵션 추가
+        세부분석: bool = True
 ):
-    """
-    이슈 모니터링 메인 명령어 - 4단계 지원
-    /monitor 주제:<주제> 기간:<기간> 세부분석:<True/False>
-    """
+    """이슈 모니터링 메인 명령어"""
     user = interaction.user
     guild = interaction.guild
     logger.info(
-        f"📝 /monitor 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}, 주제='{주제}', 기간='{기간}', 세부분석={세부분석}")
+        f"📝 /monitor 명령어 실행: 사용자={user.name}, 서버={guild.name}, 주제='{주제}', 기간='{기간}', 세부분석={세부분석}")
 
     await interaction.response.defer(thinking=True)
 
     try:
-        # 입력값 검증 및 파싱
+        # 입력값 검증
         if not validate_topic(주제):
             logger.warning(f"❌ 잘못된 주제 입력: '{주제}' (사용자: {user.name})")
             await interaction.followup.send(
@@ -237,10 +212,9 @@ async def monitor_command(
         start_date, period_description = parse_time_period(기간)
         logger.info(f"✅ 입력값 검증 완료: 주제='{주제}', 기간='{period_description}', 세부분석={세부분석}")
 
-        # 현재 구현 가능한 단계 확인
         available_stage = config.get_current_stage()
 
-        # 초기 응답 (4단계 정보 포함)
+        # 초기 응답
         embed = discord.Embed(
             title="🔍 이슈 모니터링 시작",
             description=f"**주제**: {주제}\n**기간**: {period_description}\n**세부분석**: {'활성화' if 세부분석 else '비활성화'}\n**구현 단계**: {available_stage}단계",
@@ -254,7 +228,7 @@ async def monitor_command(
             else:
                 progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⚠️ 세부 정보 수집 건너뜀\n⬜ 보고서 생성 대기\n```"
         elif available_stage >= 3:
-            progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⏳ 세부 정보 수집 준비 중\n⬜ 보고서 생성 대기\n```"
+            progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```"
         elif available_stage >= 2:
             progress_text = "```\n⏳ 키워드 생성 중...\n⬜ 이슈 검색 대기\n⬜ 세부 정보 수집 대기\n⬜ 보고서 생성 대기\n```"
         else:
@@ -276,9 +250,8 @@ async def monitor_command(
         await interaction.followup.send(embed=embed)
         logger.info(f"📤 초기 응답 전송 완료 (사용자: {user.name})")
 
-        # 단계별 처리 (4단계까지 지원)
+        # 단계별 처리
         if available_stage >= 2 and KEYWORD_GENERATION_AVAILABLE:
-            # 1단계: LLM 키워드 생성
             try:
                 logger.info(f"1단계 시작: 키워드 생성 (주제: {주제})")
 
@@ -294,7 +267,7 @@ async def monitor_command(
                 keyword_result = await generate_keywords_for_topic(주제)
                 logger.success(f"키워드 생성 완료: {len(keyword_result.primary_keywords)}개 핵심 키워드")
 
-                # 2단계: 이슈 검색 (3단계 이상에서 실행)
+                # 이슈 검색 (3단계 이상에서 실행)
                 if available_stage >= 3 and ISSUE_SEARCH_AVAILABLE:
                     # 진행상황 업데이트
                     embed.set_field_at(0,
@@ -306,7 +279,7 @@ async def monitor_command(
 
                     logger.info(f"3단계 시작: 이슈 검색 (세부분석: {세부분석})")
 
-                    # 이슈 검색 실행 (4단계 세부 정보 수집 포함)
+                    # 이슈 검색 실행
                     search_result = await search_issues_for_keywords(
                         keyword_result,
                         period_description,
@@ -316,7 +289,7 @@ async def monitor_command(
                     logger.success(
                         f"이슈 검색 완료: {search_result.total_found}개 이슈, 세부분석 {search_result.detailed_issues_count}개")
 
-                    # 4단계 세부 정보 수집 상태 업데이트
+                    # 세부 정보 수집 상태 업데이트
                     if 세부분석 and available_stage >= 3:
                         embed.set_field_at(0,
                                            name="📊 진행 상황",
@@ -342,7 +315,7 @@ async def monitor_command(
                     search_summary = create_issue_searcher().format_search_summary(search_result)
                     embed.add_field(
                         name="🔍 검색 결과",
-                        value=search_summary[:1024],  # Discord 필드 길이 제한
+                        value=search_summary[:1024],
                         inline=False
                     )
 
@@ -385,7 +358,7 @@ async def monitor_command(
 
                             preview_text += "\n"
 
-                            # 영향도 표시 (4단계 정보)
+                            # 영향도 표시
                             if issue.impact_analysis:
                                 impact_emoji = {
                                     "low": "🟢", "medium": "🟡",
@@ -396,7 +369,7 @@ async def monitor_command(
                                     preview_text += f" ({', '.join(issue.impact_analysis.affected_sectors[:2])})"
                                 preview_text += "\n"
 
-                            # 관련 인물/기관 표시 (4단계 정보)
+                            # 관련 인물/기관 표시
                             if issue.related_entities:
                                 top_entities = [e.name for e in
                                                 sorted(issue.related_entities, key=lambda x: x.relevance, reverse=True)[
@@ -407,14 +380,13 @@ async def monitor_command(
 
                         success_embed.add_field(
                             name="🔝 주요 이슈 미리보기",
-                            value=preview_text[:1024],  # Discord 제한
+                            value=preview_text[:1024],
                             inline=False
                         )
 
-                    # 상세 보고서 생성 및 파일 첨부 (4단계에서 세부 정보가 있는 경우)
+                    # 상세 보고서 생성 및 파일 첨부
                     if search_result.detailed_issues_count > 0:
                         try:
-                            # 상세 보고서 생성
                             detailed_report = create_detailed_report_from_search_result(search_result)
 
                             # 임시 파일로 저장
@@ -423,7 +395,6 @@ async def monitor_command(
                                 f.write(detailed_report)
                                 temp_file_path = f.name
 
-                            # Discord 파일 첨부
                             filename = f"issue_report_{주제.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
 
                             success_embed.add_field(
@@ -444,36 +415,9 @@ async def monitor_command(
 
                         except Exception as e:
                             logger.error(f"상세 보고서 생성 실패: {e}")
-                            # 파일 첨부 실패 시 일반 메시지만 전송
                             await interaction.followup.send(embed=success_embed)
                     else:
-                        # 세부 정보가 없는 경우 일반 메시지 전송
                         await interaction.followup.send(embed=success_embed)
-
-                    # 다음 단계 안내 (5-6단계 예정)
-                    if available_stage < 6:
-                        next_steps_embed = discord.Embed(
-                            title="🚀 다음 단계 예정",
-                            description="이슈 모니터링 시스템의 향후 업데이트 계획",
-                            color=0x3498db
-                        )
-
-                        if available_stage < 5:
-                            next_steps_embed.add_field(
-                                name="5단계: 환각 탐지 및 검증",
-                                value="• Semantic Uncertainty 분석\n• Self-Consistency Check\n• External Fact-Checking\n• 자동 재검색 메커니즘",
-                                inline=False
-                            )
-
-                        if available_stage < 6:
-                            next_steps_embed.add_field(
-                                name="6단계: 고급 보고서 생성",
-                                value="• 시간순 타임라인 시각화\n• 영향도 매트릭스\n• 트렌드 분석\n• PDF 보고서 자동 생성",
-                                inline=False
-                            )
-
-                        next_steps_embed.set_footer(text="지속적인 업데이트를 통해 더욱 정확하고 유용한 서비스를 제공하겠습니다.")
-                        await interaction.followup.send(embed=next_steps_embed)
 
                 else:
                     # 3단계 미지원 안내
@@ -536,7 +480,7 @@ async def monitor_command(
                 return
 
         else:
-            # 단계별 제한 안내 (1단계만 가능)
+            # 단계별 제한 안내
             logger.info(f"⚠️ 현재 단계 제한: {available_stage}단계 (사용자: {user.name})")
 
             limitation_embed = discord.Embed(
@@ -600,7 +544,6 @@ async def monitor_command(
 
             await interaction.followup.send(embed=limitation_embed)
 
-        # 로깅
         logger.info(
             f"📊 Monitor 명령어 완료 - 주제: {주제}, 기간: {period_description}, 세부분석: {세부분석}, 사용자: {user.name}, 단계: {available_stage}")
 
@@ -628,10 +571,10 @@ async def monitor_command(
 
 @bot.tree.command(name="help", description="봇 사용법을 안내합니다")
 async def help_command(interaction: discord.Interaction):
-    """도움말 명령어 - 4단계 지원"""
+    """도움말 명령어"""
     user = interaction.user
     guild = interaction.guild
-    logger.info(f"❓ /help 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
+    logger.info(f"❓ /help 명령어 실행: 사용자={user.name}, 서버={guild.name}")
 
     current_stage = config.get_current_stage()
 
@@ -732,10 +675,10 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="status", description="봇 시스템 상태를 확인합니다")
 async def status_command(interaction: discord.Interaction):
-    """시스템 상태 확인 명령어 - 4단계 지원"""
+    """시스템 상태 확인 명령어"""
     user = interaction.user
     guild = interaction.guild
-    logger.info(f"📊 /status 명령어 실행: 사용자={user.name}#{user.discriminator}, 서버={guild.name}")
+    logger.info(f"📊 /status 명령어 실행: 사용자={user.name}, 서버={guild.name}")
 
     stage_info = config.get_stage_info()
     current_stage = config.get_current_stage()
@@ -748,12 +691,12 @@ async def status_command(interaction: discord.Interaction):
         timestamp=datetime.now()
     )
 
-    # 단계별 상태 (4단계까지)
+    # 단계별 상태
     status_text = ""
     status_text += f"{'✅' if stage_info['stage1_discord'] else '❌'} **1단계**: Discord 봇 연결\n"
     status_text += f"{'✅' if stage_info['stage2_openai'] else '❌'} **2단계**: 키워드 생성 (OpenAI)\n"
     status_text += f"{'✅' if stage_info['stage3_perplexity'] else '❌'} **3단계**: 이슈 검색 (Perplexity)\n"
-    status_text += f"{'✅' if current_stage >= 4 else '⏳'} **4단계**: 세부 정보 수집 (확장됨)\n"
+    status_text += f"{'✅' if current_stage >= 4 else '⏳'} **4단계**: 세부 정보 수집\n"
     status_text += f"⏳ **5단계**: 환각 탐지 및 검증 (예정)\n"
     status_text += f"⏳ **6단계**: 구조화된 보고서 생성 (예정)"
 
@@ -873,7 +816,7 @@ async def on_command_error(ctx, error):
 def check_module_availability():
     """모듈 가용성 확인 및 로깅"""
     modules_status = {
-        "discord.py": True,  # 이미 import 성공
+        "discord.py": True,
         "keyword_generation": KEYWORD_GENERATION_AVAILABLE,
         "issue_search": ISSUE_SEARCH_AVAILABLE,
     }
@@ -894,9 +837,8 @@ def check_module_availability():
 
 
 def run_bot():
-    """봇 실행 함수 - 4단계 지원"""
+    """봇 실행 함수"""
     try:
-        # 설정 로드 및 검증
         logger.info("🔧 설정 로딩 중...")
 
         # 모듈 가용성 확인
@@ -906,14 +848,13 @@ def run_bot():
         if config.is_development_mode():
             config.print_stage_status()
 
-        # Discord 토큰 확인 (최소 요구사항)
+        # Discord 토큰 확인
         discord_token = config.get_discord_token()
         if not discord_token:
             logger.critical("❌ Discord 봇 토큰이 환경변수에 없습니다. .env 파일을 확인해주세요!")
             logger.info("💡 .env 파일에 DISCORD_BOT_TOKEN=your_token_here 를 추가해주세요")
             return
 
-        # 토큰 일부만 로그에 출력 (보안)
         token_preview = discord_token[:10] + "..." if len(discord_token) > 10 else "짧은토큰"
         logger.info(f"🔑 Discord 토큰 로드됨: {token_preview}")
 
@@ -956,7 +897,7 @@ def run_bot():
             logger.info("   • 상세 보고서 자동 생성")
 
         logger.info("🚀 Discord 봇 시작 중...")
-        bot.run(discord_token, log_handler=None)  # Discord.py 로그 비활성화
+        bot.run(discord_token, log_handler=None)
 
     except KeyboardInterrupt:
         logger.info("🛑 사용자가 봇 종료를 요청했습니다 (Ctrl+C)")
