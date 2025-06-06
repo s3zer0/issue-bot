@@ -1,6 +1,6 @@
 """
 이슈 검색 모듈 - Perplexity API 연동
-생성된 키워드를 기반으로 실시간 이슈를 검색하고 세부 정보를 수집하는 모듈
+생성된 키워드를 기반으로 실시간 이슈를 검색하고 세부 정보를 수집
 """
 
 import asyncio
@@ -8,7 +8,6 @@ import json
 import time
 from typing import List, Dict, Optional, Any, Tuple
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 import httpx
 from loguru import logger
 
@@ -19,75 +18,75 @@ from src.keyword_generator import KeywordResult
 @dataclass
 class EntityInfo:
     """관련 인물/기관 정보"""
-    name: str  # 인물/기관명
-    role: str  # 역할/직책
-    relevance: float  # 관련도 (0.0-1.0)
+    name: str
+    role: str
+    relevance: float  # 0.0-1.0
     entity_type: str  # 'person', 'organization', 'company', 'government'
-    description: str  # 간단한 설명
+    description: str
 
 
 @dataclass
 class ImpactAnalysis:
     """영향도 분석 정보"""
     impact_level: str  # 'low', 'medium', 'high', 'critical'
-    impact_score: float  # 수치적 영향도 (0.0-1.0)
-    affected_sectors: List[str]  # 영향받는 분야
+    impact_score: float  # 0.0-1.0
+    affected_sectors: List[str]
     geographic_scope: str  # 'local', 'national', 'regional', 'global'
     time_sensitivity: str  # 'immediate', 'short-term', 'long-term'
-    reasoning: str  # 영향도 판단 근거
+    reasoning: str
 
 
 @dataclass
 class TimelineEvent:
     """시간순 이벤트 정보"""
-    date: str  # 이벤트 발생일
+    date: str
     event_type: str  # 'announcement', 'development', 'reaction', 'consequence'
-    description: str  # 이벤트 설명
-    importance: float  # 중요도 (0.0-1.0)
-    source: str  # 정보 출처
+    description: str
+    importance: float  # 0.0-1.0
+    source: str
 
 
 @dataclass
 class IssueItem:
-    """개별 이슈 정보를 담는 데이터 클래스 - 확장됨"""
-    title: str  # 이슈 제목
-    summary: str  # 이슈 요약
-    source: str  # 출처 (URL 또는 매체명)
-    published_date: Optional[str]  # 발행일
-    relevance_score: float  # 관련성 점수 (0.0-1.0)
-    category: str  # 카테고리 (news, blog, social, academic)
-    content_snippet: str  # 내용 일부
+    """개별 이슈 정보를 담는 데이터 클래스"""
+    title: str
+    summary: str
+    source: str
+    published_date: Optional[str]
+    relevance_score: float
+    category: str
+    content_snippet: str
 
-    # 4단계 추가 정보
-    detailed_content: Optional[str] = None  # 상세 내용
-    related_entities: List[EntityInfo] = None  # 관련 인물/기관
-    impact_analysis: Optional[ImpactAnalysis] = None  # 영향도 분석
-    timeline_events: List[TimelineEvent] = None  # 시간순 이벤트
-    background_context: Optional[str] = None  # 배경 정보
-    detail_collection_time: Optional[float] = None  # 세부 정보 수집 시간
-    detail_confidence: Optional[float] = None  # 세부 정보 신뢰도
+    # 4단계 세부 정보
+    detailed_content: Optional[str] = None
+    related_entities: List[EntityInfo] = None
+    impact_analysis: Optional[ImpactAnalysis] = None
+    timeline_events: List[TimelineEvent] = None
+    background_context: Optional[str] = None
+    detail_collection_time: Optional[float] = None
+    detail_confidence: Optional[float] = None
 
 
 @dataclass
 class SearchResult:
-    """이슈 검색 결과를 담는 데이터 클래스 - 확장됨"""
-    query_keywords: List[str]  # 검색에 사용된 키워드
-    total_found: int  # 총 발견된 이슈 수
-    issues: List[IssueItem]  # 이슈 목록
-    search_time: float  # 검색 소요 시간 (초)
-    api_calls_used: int  # 사용된 API 호출 수
-    confidence_score: float  # 검색 결과 신뢰도
-    time_period: str  # 검색 기간
-    raw_responses: List[str]  # 원본 API 응답들
+    """이슈 검색 결과를 담는 데이터 클래스"""
+    query_keywords: List[str]
+    total_found: int
+    issues: List[IssueItem]
+    search_time: float
+    api_calls_used: int
+    confidence_score: float
+    time_period: str
+    raw_responses: List[str]
 
-    # 4단계 추가 정보
-    detailed_issues_count: int = 0  # 세부 정보가 수집된 이슈 수
-    total_detail_collection_time: float = 0.0  # 총 세부 정보 수집 시간
-    average_detail_confidence: float = 0.0  # 평균 세부 정보 신뢰도
+    # 4단계 세부 정보
+    detailed_issues_count: int = 0
+    total_detail_collection_time: float = 0.0
+    average_detail_confidence: float = 0.0
 
 
 class PerplexityClient:
-    """Perplexity API 클라이언트 - 4단계 기능 추가"""
+    """Perplexity API 클라이언트"""
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or config.get_perplexity_api_key()
@@ -99,7 +98,6 @@ class PerplexityClient:
         self.timeout = 60
         self.max_retries = 3
 
-        # HTTP 클라이언트 설정
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -113,10 +111,7 @@ class PerplexityClient:
             time_period: str = "최근 1주일",
             max_results: int = 10
     ) -> Dict[str, Any]:
-        """
-        키워드를 사용하여 이슈를 검색합니다 (기존 메서드)
-        """
-        # 기존 구현 유지
+        """키워드를 사용하여 이슈를 검색"""
         keyword_str = ", ".join(keywords[:5])
 
         prompt = f"""다음 키워드들과 관련된 {time_period} 동안의 최신 이슈와 뉴스를 찾아주세요: {keyword_str}
@@ -145,9 +140,7 @@ class PerplexityClient:
             issue_summary: str,
             original_keywords: List[str]
     ) -> Dict[str, Any]:
-        """
-        특정 이슈에 대한 세부 정보를 수집합니다 (4단계 신규)
-        """
+        """특정 이슈에 대한 세부 정보를 수집"""
         keywords_str = ", ".join(original_keywords[:3])
 
         prompt = f"""다음 이슈에 대한 상세한 분석을 제공해주세요:
@@ -182,9 +175,7 @@ class PerplexityClient:
             issue_title: str,
             detailed_content: str
     ) -> Dict[str, Any]:
-        """
-        이슈에서 관련 인물/기관 및 영향도를 추출합니다 (4단계 신규)
-        """
+        """이슈에서 관련 인물/기관 및 영향도를 추출"""
         prompt = f"""다음 이슈 내용을 분석하여 JSON 형식으로 정보를 추출해주세요:
 
 **이슈**: {issue_title}
@@ -222,9 +213,7 @@ class PerplexityClient:
             issue_title: str,
             detailed_content: str
     ) -> Dict[str, Any]:
-        """
-        이슈의 시간순 전개를 추출합니다 (4단계 신규)
-        """
+        """이슈의 시간순 전개를 추출"""
         prompt = f"""다음 이슈의 시간순 전개를 JSON 형식으로 정리해주세요:
 
 **이슈**: {issue_title}
@@ -251,9 +240,7 @@ class PerplexityClient:
         return await self._make_api_call(prompt)
 
     async def _make_api_call(self, prompt: str) -> Dict[str, Any]:
-        """
-        공통 API 호출 메서드
-        """
+        """공통 API 호출 메서드"""
         payload = {
             "model": self.model,
             "messages": [
@@ -273,7 +260,6 @@ class PerplexityClient:
             "return_images": False
         }
 
-        # API 호출 with 재시도
         for attempt in range(self.max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -314,18 +300,7 @@ class PerplexityClient:
 
 
 class IssueSearcher:
-    """
-    이슈 검색기 - 4단계 세부 정보 수집 기능 추가
-
-    주요 기능:
-    - 키워드 기반 이슈 검색 (기존)
-    - 검색 결과 파싱 및 구조화 (기존)
-    - 관련성 점수 계산 (기존)
-    - 세부 정보 수집 (신규)
-    - 관련 인물/기관 추출 (신규)
-    - 영향도 분석 (신규)
-    - 시간순 전개 추적 (신규)
-    """
+    """이슈 검색기 - 4단계 세부 정보 수집 기능 포함"""
 
     def __init__(self, api_key: Optional[str] = None):
         self.client = PerplexityClient(api_key)
@@ -334,8 +309,8 @@ class IssueSearcher:
 
         # 4단계 설정
         self.enable_detailed_collection = True
-        self.max_detailed_issues = 10  # 세부 정보를 수집할 최대 이슈 수
-        self.detail_collection_timeout = 60  # 각 이슈별 세부 정보 수집 타임아웃
+        self.max_detailed_issues = 10
+        self.detail_collection_timeout = 60
 
         logger.info("IssueSearcher 초기화 완료 (4단계 세부 정보 수집 지원)")
 
@@ -346,23 +321,12 @@ class IssueSearcher:
             max_total_results: int = 20,
             collect_details: bool = True
     ) -> SearchResult:
-        """
-        키워드 생성 결과를 기반으로 이슈를 검색하고 세부 정보를 수집합니다 (확장됨)
-
-        Args:
-            keyword_result: 키워드 생성 결과
-            time_period: 검색 기간
-            max_total_results: 최대 총 결과 수
-            collect_details: 세부 정보 수집 여부 (4단계)
-
-        Returns:
-            SearchResult: 검색 결과 (세부 정보 포함)
-        """
+        """키워드 생성 결과를 기반으로 이슈를 검색하고 세부 정보를 수집"""
         start_time = time.time()
         logger.info(f"이슈 검색 시작: 주제='{keyword_result.topic}', 기간='{time_period}', 세부수집={collect_details}")
 
         try:
-            # 1단계: 기본 이슈 검색 (기존 로직)
+            # 1. 기본 이슈 검색
             search_keywords = self._prepare_search_keywords(keyword_result)
             api_response = await self.client.search_issues(
                 keywords=search_keywords,
@@ -370,12 +334,12 @@ class IssueSearcher:
                 max_results=max_total_results
             )
 
-            # 2단계: 응답 파싱 (기존 로직)
+            # 2. 응답 파싱
             issues = self._parse_api_response(api_response, search_keywords)
             scored_issues = self._calculate_relevance_scores(issues, keyword_result)
             top_issues = sorted(scored_issues, key=lambda x: x.relevance_score, reverse=True)[:max_total_results]
 
-            # 3단계: 세부 정보 수집 (신규 로직)
+            # 3. 세부 정보 수집 (4단계)
             detailed_issues_count = 0
             total_detail_time = 0.0
             detail_confidences = []
@@ -383,7 +347,6 @@ class IssueSearcher:
             if collect_details and self.enable_detailed_collection and top_issues:
                 logger.info(f"4단계 세부 정보 수집 시작: {min(len(top_issues), self.max_detailed_issues)}개 이슈")
 
-                # 상위 이슈들에 대해서만 세부 정보 수집
                 issues_to_detail = top_issues[:self.max_detailed_issues]
 
                 for i, issue in enumerate(issues_to_detail):
@@ -391,10 +354,7 @@ class IssueSearcher:
                         detail_start = time.time()
                         logger.info(f"세부 정보 수집 중 ({i + 1}/{len(issues_to_detail)}): {issue.title[:50]}...")
 
-                        # 세부 정보 수집 실행
                         enhanced_issue = await self._collect_issue_details(issue, search_keywords)
-
-                        # 원본 이슈를 업데이트된 이슈로 교체
                         top_issues[top_issues.index(issue)] = enhanced_issue
 
                         detail_time = time.time() - detail_start
@@ -417,18 +377,16 @@ class IssueSearcher:
                         logger.error(f"세부 정보 수집 실패: {issue.title[:50]} - {str(e)}")
                         continue
 
-            # 4단계: 최종 결과 생성
+            # 4. 최종 결과 생성
             confidence_score = self._calculate_confidence_score(top_issues, keyword_result)
             search_time = time.time() - start_time
 
-            # 원본 응답 저장
             try:
                 raw_response_str = json.dumps(api_response, ensure_ascii=False, indent=2)
             except (TypeError, ValueError) as e:
                 logger.warning(f"API 응답 JSON 직렬화 실패: {e}")
                 raw_response_str = str(api_response)
 
-            # 평균 세부 정보 신뢰도 계산
             avg_detail_confidence = sum(detail_confidences) / len(detail_confidences) if detail_confidences else 0.0
 
             result = SearchResult(
@@ -436,7 +394,7 @@ class IssueSearcher:
                 total_found=len(top_issues),
                 issues=top_issues,
                 search_time=search_time,
-                api_calls_used=1 + detailed_issues_count * 2,  # 기본 검색 + 각 이슈별 2회 호출
+                api_calls_used=1 + detailed_issues_count * 2,
                 confidence_score=confidence_score,
                 time_period=time_period,
                 raw_responses=[raw_response_str],
@@ -461,9 +419,7 @@ class IssueSearcher:
             issue: IssueItem,
             original_keywords: List[str]
     ) -> IssueItem:
-        """
-        개별 이슈의 세부 정보를 수집합니다 (4단계 신규)
-        """
+        """개별 이슈의 세부 정보를 수집 (4단계)"""
         detail_start_time = time.time()
 
         try:
@@ -487,7 +443,6 @@ class IssueSearcher:
                 self.client.extract_timeline(issue.title, detailed_content)
             )
 
-            # 결과 대기
             entity_response, timeline_response = await asyncio.gather(
                 entity_task, timeline_task, return_exceptions=True
             )
@@ -501,7 +456,7 @@ class IssueSearcher:
                 detailed_content, entities, impact, timeline_events
             )
 
-            # 5. 기존 IssueItem 업데이트
+            # 5. IssueItem 업데이트
             issue.detailed_content = detailed_content
             issue.related_entities = entities
             issue.impact_analysis = impact
@@ -520,16 +475,15 @@ class IssueSearcher:
             raise
 
     def _extract_detailed_content(self, api_response: Dict[str, Any]) -> str:
-        """API 응답에서 상세 내용을 추출합니다"""
+        """API 응답에서 상세 내용을 추출"""
         try:
             content = api_response['choices'][0]['message']['content']
-            # 상세 내용 섹션 추출 (간단한 파싱)
             if "**상세 내용**" in content:
                 sections = content.split("**상세 내용**:")
                 if len(sections) > 1:
                     detailed_section = sections[1].split("**")[0].strip()
                     return detailed_section
-            return content[:1000]  # 폴백: 처음 1000자
+            return content[:1000]
         except Exception as e:
             logger.warning(f"상세 내용 추출 실패: {e}")
             return "상세 내용 추출 실패"
@@ -538,7 +492,7 @@ class IssueSearcher:
             self,
             response: Any
     ) -> Tuple[List[EntityInfo], Optional[ImpactAnalysis]]:
-        """엔티티 및 영향도 응답을 파싱합니다"""
+        """엔티티 및 영향도 응답을 파싱"""
         entities = []
         impact = None
 
@@ -549,7 +503,6 @@ class IssueSearcher:
 
             content = response['choices'][0]['message']['content']
 
-            # JSON 추출 시도
             import re
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
@@ -587,7 +540,7 @@ class IssueSearcher:
             self,
             response: Any
     ) -> Tuple[List[TimelineEvent], str]:
-        """타임라인 응답을 파싱합니다"""
+        """타임라인 응답을 파싱"""
         timeline_events = []
         background_context = ""
 
@@ -598,13 +551,11 @@ class IssueSearcher:
 
             content = response['choices'][0]['message']['content']
 
-            # JSON 추출 시도
             import re
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group())
 
-                # 타임라인 파싱
                 for event_data in data.get('timeline', []):
                     event = TimelineEvent(
                         date=event_data.get('date', ''),
@@ -615,7 +566,6 @@ class IssueSearcher:
                     )
                     timeline_events.append(event)
 
-                # 배경 정보
                 background_context = data.get('background_context', '')
 
         except Exception as e:
@@ -630,9 +580,10 @@ class IssueSearcher:
             impact: Optional[ImpactAnalysis],
             timeline_events: List[TimelineEvent]
     ) -> float:
+        """세부 정보 신뢰도 계산"""
         confidence = 0.0
 
-        # 내용 길이 점수 (최대 0.2) - 기존 0.3에서 축소
+        # 내용 길이 점수 (최대 0.2)
         if len(detailed_content) > 100:
             confidence += 0.2
         elif len(detailed_content) > 50:
@@ -640,32 +591,29 @@ class IssueSearcher:
         else:
             confidence += 0.1
 
-        # 엔티티 정보 점수 (최대 0.4) - 기존 0.3에서 확대
+        # 엔티티 정보 점수 (최대 0.4)
         if entities:
             entity_score = min(0.3, len(entities) * 0.15)
-            # 고품질 엔티티 보너스 강화
             high_relevance_entities = [e for e in entities if e.relevance > 0.8]
             if high_relevance_entities:
                 entity_score += 0.1
             confidence += entity_score
 
-        # 영향도 분석 점수 (최대 0.3) - 기존 0.2에서 확대
+        # 영향도 분석 점수 (최대 0.3)
         if impact:
             confidence += 0.2
-            # 구체적인 영향도 분석 보너스 강화
             if impact.affected_sectors and len(impact.affected_sectors) > 0:
                 confidence += 0.1
 
-        # 타임라인 점수 (최대 0.2) - 유지
+        # 타임라인 점수 (최대 0.2)
         if timeline_events:
             timeline_score = min(0.2, len(timeline_events) * 0.1)
             confidence += timeline_score
 
         return min(1.0, confidence)
 
-    # 기존 메서드들 유지 (변경 없음)
     def _prepare_search_keywords(self, keyword_result: KeywordResult) -> List[str]:
-        """검색을 위한 최적의 키워드 조합을 준비합니다"""
+        """검색을 위한 최적의 키워드 조합을 준비"""
         keywords = []
         keywords.extend(keyword_result.primary_keywords[:3])
         keywords.extend(keyword_result.related_terms[:2])
@@ -674,7 +622,7 @@ class IssueSearcher:
         return unique_keywords
 
     def _parse_api_response(self, api_response: Dict[str, Any], search_keywords: List[str]) -> List[IssueItem]:
-        """Perplexity API 응답을 파싱하여 IssueItem 리스트로 변환합니다"""
+        """Perplexity API 응답을 파싱하여 IssueItem 리스트로 변환"""
         issues = []
 
         try:
@@ -694,12 +642,11 @@ class IssueSearcher:
 
         except Exception as e:
             logger.error(f"API 응답 파싱 실패: {e}")
-            logger.debug(f"원본 응답: {api_response}")
 
         return issues
 
     def _parse_issue_section(self, section: str, index: int) -> Optional[IssueItem]:
-        """개별 이슈 섹션을 파싱합니다"""
+        """개별 이슈 섹션을 파싱"""
         try:
             lines = section.strip().split('\n')
             title = lines[0].strip()
@@ -731,7 +678,6 @@ class IssueSearcher:
                 relevance_score=0.5,
                 category=category,
                 content_snippet=summary[:200],
-                # 4단계 필드들은 초기값으로 설정
                 related_entities=[],
                 timeline_events=[]
             )
@@ -741,7 +687,7 @@ class IssueSearcher:
             return None
 
     def _calculate_relevance_scores(self, issues: List[IssueItem], keyword_result: KeywordResult) -> List[IssueItem]:
-        """각 이슈의 관련성 점수를 계산합니다"""
+        """각 이슈의 관련성 점수를 계산"""
         all_keywords = []
         all_keywords.extend(keyword_result.primary_keywords)
         all_keywords.extend(keyword_result.related_terms)
@@ -771,7 +717,7 @@ class IssueSearcher:
         return issues
 
     def _calculate_confidence_score(self, issues: List[IssueItem], keyword_result: KeywordResult) -> float:
-        """검색 결과의 전체 신뢰도를 계산합니다"""
+        """검색 결과의 전체 신뢰도를 계산"""
         if not issues:
             return 0.0
 
@@ -785,7 +731,7 @@ class IssueSearcher:
 
     def _create_fallback_result(self, keyword_result: KeywordResult, time_period: str,
                                 search_time: float) -> SearchResult:
-        """검색 실패 시 폴백 결과를 생성합니다"""
+        """검색 실패 시 폴백 결과를 생성"""
         logger.warning("검색 실패로 인한 폴백 결과 생성")
 
         return SearchResult(
@@ -800,7 +746,7 @@ class IssueSearcher:
         )
 
     def format_search_summary(self, result: SearchResult) -> str:
-        """검색 결과를 요약 문자열로 포맷팅합니다 (4단계 정보 포함)"""
+        """검색 결과를 요약 문자열로 포맷팅 (4단계 정보 포함)"""
         if result.total_found == 0:
             return f"**이슈 검색 실패** (키워드: {', '.join(result.query_keywords[:3])})\n❌ 관련 이슈를 찾을 수 없습니다."
 
@@ -816,25 +762,24 @@ class IssueSearcher:
 
         summary += f" | 소요시간: {result.search_time:.1f}초\n\n"
 
-        # 상위 이슈들 미리보기 (세부 정보 포함)
+        # 상위 이슈들 미리보기
         for i, issue in enumerate(result.issues[:3], 1):
             summary += f"**{i}. {issue.title}**\n"
             summary += f"   📰 {issue.source} | 관련도: {int(issue.relevance_score * 100)}%"
 
-            # 세부 정보 추가 표시
             if issue.detail_confidence and issue.detail_confidence > 0:
                 summary += f" | 세부신뢰도: {int(issue.detail_confidence * 100)}%"
 
             summary += "\n"
             summary += f"   📝 {issue.summary[:100]}{'...' if len(issue.summary) > 100 else ''}\n"
 
-            # 관련 인물/기관 표시 (있는 경우)
+            # 관련 인물/기관 표시
             if issue.related_entities and len(issue.related_entities) > 0:
                 top_entities = [e.name for e in
                                 sorted(issue.related_entities, key=lambda x: x.relevance, reverse=True)[:2]]
                 summary += f"   👥 관련: {', '.join(top_entities)}\n"
 
-            # 영향도 표시 (있는 경우)
+            # 영향도 표시
             if issue.impact_analysis:
                 impact_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}.get(
                     issue.impact_analysis.impact_level, "⚪")
@@ -853,7 +798,7 @@ class IssueSearcher:
         return summary
 
     def format_detailed_issue_report(self, issue: IssueItem) -> str:
-        """개별 이슈의 상세 보고서를 포맷팅합니다 (4단계 신규)"""
+        """개별 이슈의 상세 보고서를 포맷팅 (4단계)"""
         if not issue.detailed_content:
             return f"**{issue.title}**\n📝 {issue.summary}\n📰 출처: {issue.source}"
 
@@ -935,9 +880,9 @@ class IssueSearcher:
         return report
 
 
-# 편의 함수들 (기존 + 확장)
+# 편의 함수들
 def create_issue_searcher(api_key: Optional[str] = None) -> IssueSearcher:
-    """이슈 검색기 인스턴스를 생성합니다"""
+    """이슈 검색기 인스턴스를 생성"""
     return IssueSearcher(api_key=api_key)
 
 
@@ -949,13 +894,6 @@ async def search_issues_for_keywords(
     """키워드를 기반으로 이슈를 검색하는 편의 함수 (4단계 지원)"""
     searcher = create_issue_searcher()
     return await searcher.search_issues_from_keywords(keyword_result, time_period, collect_details=collect_details)
-
-
-# 4단계 전용 편의 함수들
-async def get_detailed_issue_analysis(issue_title: str, issue_summary: str, keywords: List[str]) -> Dict[str, Any]:
-    """특정 이슈에 대한 상세 분석을 가져오는 편의 함수"""
-    client = PerplexityClient()
-    return await client.collect_detailed_information(issue_title, issue_summary, keywords)
 
 
 def create_detailed_report_from_search_result(search_result: SearchResult) -> str:
