@@ -7,26 +7,26 @@ import asyncio
 import json
 import re
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from loguru import logger
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, AuthenticationError
 except ImportError:
-    logger.error("OpenAI 라이브러리가 설치되지 않았습니다. 'pip install openai' 실행")
-    raise
+    logger.error("OpenAI 라이브러리가 설치되지 않았습니다. 'pip install openai'를 실행해주세요.")
+    class AsyncOpenAI: pass
+    class AuthenticationError(Exception): pass
 
 from src.config import config
 
 
 @dataclass
 class KeywordResult:
-    """키워드 생성 결과를 담는 데이터 클래스"""
+    """키워드 생성 결과를 담는 데이터 클래스 (synonyms 필드 제거)"""
     topic: str
     primary_keywords: List[str]
     related_terms: List[str]
-    synonyms: List[str]
     context_keywords: List[str]
     confidence_score: float
     generation_time: float
@@ -36,28 +36,25 @@ class KeywordResult:
 class KeywordGenerator:
     """LLM 기반 키워드 생성기"""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or config.get_openai_api_key()
-        self.model = model
+        self.model = model or config.get_openai_model()
 
         if not self.api_key:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다")
 
         self.client = AsyncOpenAI(api_key=self.api_key)
-
-        # 설정값 로드
         self.max_retries = config.get_max_retry_count()
         self.timeout = config.get_keyword_generation_timeout()
         self.temperature = config.get_openai_temperature()
         self.max_tokens = config.get_openai_max_tokens()
-
         logger.info(f"KeywordGenerator 초기화 완료 (모델: {self.model})")
 
     async def generate_keywords(
         self,
         topic: str,
         context: Optional[str] = None,
-        num_keywords: int = 20
+        num_keywords: int = 15
     ) -> KeywordResult:
         """주제에 대한 키워드를 생성합니다"""
         start_time = time.time()
@@ -78,46 +75,40 @@ class KeywordGenerator:
                 f"신뢰도 {keyword_result.confidence_score:.2f}, "
                 f"소요시간 {keyword_result.generation_time:.1f}초"
             )
-
             return keyword_result
-
         except Exception as e:
-            logger.error(f"키워드 생성 실패: {str(e)}")
+            logger.error(f"키워드 생성 실패: {e}")
             raise
 
     def _build_prompt(self, topic: str, context: Optional[str], num_keywords: int) -> str:
-        """키워드 생성을 위한 프롬프트 구성"""
-        base_prompt = f"""주제 "{topic}"에 대한 이슈 모니터링을 위한 키워드를 생성해주세요.
+        """
+        [수정됨] 키워드 생성을 위한 프롬프트를 개선하여 단순 번역을 방지하고 품질을 높입니다.
+        """
+        base_prompt = f"""주제 "{topic}"에 대한 심층적인 이슈 모니터링을 위한 검색 키워드를 생성해주세요.
 
-요구사항:
-1. 핵심 키워드 (Primary Keywords): 주제와 직접적으로 관련된 핵심 용어들
-2. 관련 용어 (Related Terms): 주제와 연관된 기술, 개념, 트렌드
-3. 동의어 (Synonyms): 같은 의미의 다른 표현들
-4. 맥락 키워드 (Context Keywords): 해당 분야의 배경 지식이나 관련 영역
+**요구사항:**
+1.  **핵심 키워드 (Primary Keywords)**: 주제를 가장 잘 나타내는 핵심 단어 및 구문. (예: '인공지능', 'AI', 'Generative AI')
+2.  **관련 용어 (Related Terms)**: 주제와 밀접하게 연관된 하위 기술, 주요 인물, 관련 제품/서비스, 주요 기업/기관 이름 등 구체적인 용어. (예: 'LLM', 'OpenAI', 'Sora', 'Figure 01')
+3.  **맥락 키워드 (Context Keywords)**: 주제가 포함된 더 넓은 산업 분야나 사회적 맥락을 나타내는 용어. (예: '디지털 전환', '노동 시장 변화', 'AI 윤리')
 
-각 카테고리별로 {max(3, num_keywords//4)}~{min(8, num_keywords//2)}개씩 생성해주세요."""
+**생성 가이드라인:**
+-   각 카테고리별로 {max(3, num_keywords//3)}~{min(6, num_keywords//2)}개씩 생성해주세요.
+-   한국어와 영어를 자연스럽게 혼용하되, 실제 업계에서 통용되는 용어를 사용해주세요 (예: '딥페이크'는 한글로, 'LLM'은 영어로).
+-   **단순 번역을 절대 피해주세요.** 예를 들어 'AI'와 '인공지능'을 모두 생성하기보다, '생성형 AI', 'AGI' 등 더 구체적이거나 다른 차원의 키워드를 제안해야 합니다.
+-   검색 엔진에서 유의미한 결과를 얻을 수 있는 구체적이고 전문적인 용어를 선호합니다."""
 
         if context:
-            base_prompt += f"\n\n추가 맥락: {context}"
+            base_prompt += f"\n\n**추가 맥락**: {context}"
 
         base_prompt += """
 
-응답 형식 (반드시 유효한 JSON으로 응답):
+**응답 형식 (반드시 유효한 JSON으로만 응답):**
 {
-    "primary_keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"],
-    "related_terms": ["용어1", "용어2", "용어3", "용어4"],
-    "synonyms": ["동의어1", "동의어2", "동의어3"],
+    "primary_keywords": ["키워드1", "키워드2"],
+    "related_terms": ["관련용어1", "관련용어2", "관련용어3"],
     "context_keywords": ["맥락1", "맥락2", "맥락3", "맥락4"],
     "confidence": 0.9
-}
-
-주의사항:
-- 키워드는 한국어와 영어를 모두 포함해주세요
-- 검색에 효과적인 구체적인 용어를 선택해주세요  
-- 너무 일반적이거나 모호한 용어는 피해주세요
-- confidence는 생성 품질에 대한 자신감을 0.0-1.0 사이로 표현해주세요
-- 반드시 위의 JSON 형식으로만 응답해주세요"""
-
+}"""
         return base_prompt
 
     async def _call_llm(self, prompt: str) -> str:
@@ -125,15 +116,12 @@ class KeywordGenerator:
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"LLM API 호출 시도 {attempt + 1}/{self.max_retries}")
-
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=[
                         {
                             "role": "system",
-                            "content": "당신은 이슈 모니터링을 위한 키워드 생성 전문가입니다. "
-                                     "주어진 주제에 대해 포괄적이고 효과적인 검색 키워드를 생성해주세요. "
-                                     "반드시 유효한 JSON 형식으로만 응답하세요."
+                            "content": "당신은 특정 주제에 대한 깊이 있는 분석을 위해 검색 키워드를 생성하는 IT 전문 분석가입니다. 반드시 유효한 JSON 형식으로만 응답해야 합니다."
                         },
                         {"role": "user", "content": prompt}
                     ],
@@ -141,68 +129,47 @@ class KeywordGenerator:
                     max_tokens=self.max_tokens,
                     timeout=self.timeout
                 )
-
                 content = response.choices[0].message.content
                 if not content:
                     raise ValueError("LLM 응답이 비어있습니다")
-
                 return content.strip()
-
+            except AuthenticationError as e:
+                logger.error(f"OpenAI 인증 오류: {e.message}")
+                raise ValueError("OpenAI API 키가 유효하지 않습니다.") from e
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f"LLM API 호출 실패 (시도 {attempt + 1}): {error_msg}")
-
                 if attempt == self.max_retries - 1:
-                    if "401" in error_msg:
-                        raise ValueError("OpenAI API 키가 유효하지 않습니다.")
-                    elif "429" in error_msg:
+                    if "429" in error_msg or "rate limit" in error_msg.lower():
                         raise ValueError("API 사용량 한도를 초과했습니다.")
                     elif "quota" in error_msg.lower():
                         raise ValueError("OpenAI 크레딧이 부족합니다.")
                     else:
                         raise ValueError(f"LLM API 호출 최종 실패: {error_msg}")
+                await asyncio.sleep(2 ** attempt)
+        raise ValueError("모든 재시도에 실패했습니다.")
 
-                # 지수 백오프 대기
-                wait_time = 2 ** attempt
-                await asyncio.sleep(wait_time)
 
     def _parse_response(self, topic: str, raw_response: str, generation_time: float) -> KeywordResult:
         """LLM 응답을 파싱하여 KeywordResult로 변환"""
         try:
-            # JSON 추출
-            cleaned_response = re.sub(r'```json\s*\n', '', raw_response)
-            cleaned_response = re.sub(r'\n\s*```', '', cleaned_response)
-
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_response, re.DOTALL)
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw_response, re.DOTALL)
             if not json_match:
                 raise ValueError("응답에서 유효한 JSON을 찾을 수 없습니다")
 
-            json_str = json_match.group()
+            data = json.loads(json_match.group())
 
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON 파싱 실패: {e}")
-                raise ValueError(f"JSON 파싱 실패: {e}")
+            # [수정됨] 'synonyms' 필드 제거
+            required_fields = ['primary_keywords', 'related_terms', 'context_keywords']
+            if not all(field in data for field in required_fields):
+                raise ValueError(f"필수 필드가 누락되었습니다: {required_fields}")
 
-            # 필수 필드 검증
-            required_fields = ['primary_keywords', 'related_terms', 'synonyms', 'context_keywords']
-            missing_fields = [field for field in required_fields if field not in data]
-            if missing_fields:
-                raise ValueError(f"필수 필드가 누락되었습니다: {missing_fields}")
+            primary_keywords = self._clean_keywords(data.get('primary_keywords', []))
+            related_terms = self._clean_keywords(data.get('related_terms', []))
+            context_keywords = self._clean_keywords(data.get('context_keywords', []))
+            confidence_score = min(1.0, max(0.0, float(data.get('confidence', 0.8))))
 
-            # 데이터 정제
-            primary_keywords = self._clean_keywords(data['primary_keywords'])
-            related_terms = self._clean_keywords(data['related_terms'])
-            synonyms = self._clean_keywords(data['synonyms'])
-            context_keywords = self._clean_keywords(data['context_keywords'])
-
-            # 신뢰도 점수 처리
-            raw_confidence = float(data.get('confidence', 0.8))
-            confidence_score = max(0.0, min(1.0, raw_confidence))
-
-            # 최소 키워드 보장
-            if len(primary_keywords) == 0:
+            if not primary_keywords:
                 primary_keywords = [topic]
                 confidence_score = 0.5
 
@@ -210,35 +177,28 @@ class KeywordGenerator:
                 topic=topic,
                 primary_keywords=primary_keywords,
                 related_terms=related_terms,
-                synonyms=synonyms,
                 context_keywords=context_keywords,
                 confidence_score=confidence_score,
                 generation_time=generation_time,
                 raw_response=raw_response
             )
-
         except Exception as e:
-            logger.error(f"응답 파싱 실패: {str(e)}")
+            logger.error(f"응답 파싱 실패: {e}")
             return self._create_fallback_result(topic, raw_response, generation_time)
 
-    def _clean_keywords(self, keywords: List[str]) -> List[str]:
-        """키워드 리스트 정제"""
+    def _clean_keywords(self, keywords: List[Any]) -> List[str]:
+        """키워드 리스트를 정제합니다."""
         if not isinstance(keywords, list):
-            logger.warning(f"키워드가 리스트가 아닙니다: {type(keywords)}")
+            logger.warning(f"키워드 데이터가 리스트가 아닙니다: {type(keywords)}")
             return []
 
         cleaned = []
         for keyword in keywords:
             if isinstance(keyword, str):
-                keyword = keyword.strip().strip('"\'').strip()
-                if keyword and len(keyword) > 1:
+                keyword = keyword.strip().strip('"\'')
+                if len(keyword) > 1:
                     cleaned.append(keyword)
-            elif keyword is not None:
-                keyword_str = str(keyword).strip()
-                if keyword_str and len(keyword_str) > 1:
-                    cleaned.append(keyword_str)
 
-        # 중복 제거
         seen = set()
         unique_keywords = []
         for keyword in cleaned:
@@ -246,13 +206,11 @@ class KeywordGenerator:
             if lower_keyword not in seen:
                 seen.add(lower_keyword)
                 unique_keywords.append(keyword)
-
-        return unique_keywords[:12]  # 최대 12개로 제한
+        return unique_keywords[:12]
 
     def _create_fallback_result(self, topic: str, raw_response: str, generation_time: float) -> KeywordResult:
-        """파싱 실패시 기본 키워드 결과 생성"""
+        """파싱 실패 시 기본 키워드 결과 생성"""
         logger.warning("파싱 실패로 인한 폴백 키워드 생성")
-
         basic_keywords = [topic.strip()]
         words = topic.split()
         if len(words) > 1:
@@ -264,7 +222,6 @@ class KeywordGenerator:
             topic=topic,
             primary_keywords=basic_keywords,
             related_terms=[],
-            synonyms=[],
             context_keywords=[],
             confidence_score=0.2,
             generation_time=generation_time,
@@ -272,12 +229,8 @@ class KeywordGenerator:
         )
 
     def get_all_keywords(self, result: KeywordResult) -> List[str]:
-        """모든 키워드를 하나의 리스트로 반환"""
-        all_keywords = []
-        all_keywords.extend(result.primary_keywords)
-        all_keywords.extend(result.related_terms)
-        all_keywords.extend(result.synonyms)
-        all_keywords.extend(result.context_keywords)
+        """[수정됨] 모든 키워드를 하나의 리스트로 반환"""
+        all_keywords = (result.primary_keywords + result.related_terms + result.context_keywords)
         return list(dict.fromkeys(all_keywords))
 
     def format_keywords_summary(self, result: KeywordResult) -> str:
@@ -285,35 +238,34 @@ class KeywordGenerator:
         total_count = len(self.get_all_keywords(result))
         confidence_percent = int(result.confidence_score * 100)
 
-        summary = f"**키워드 생성 완료** (주제: {result.topic})\n"
-        summary += f"📊 총 {total_count}개 키워드 | 신뢰도: {confidence_percent}% | 소요시간: {result.generation_time:.1f}초\n\n"
+        summary = (f"**키워드 생성 완료** (주제: {result.topic})\n"
+                   f"📊 총 {total_count}개 키워드 | 신뢰도: {confidence_percent}% | 소요시간: {result.generation_time:.1f}초\n\n")
 
         if result.primary_keywords:
-            summary += f"🎯 **핵심**: {', '.join(result.primary_keywords[:5])}"
-            if len(result.primary_keywords) > 5:
-                summary += f" 외 {len(result.primary_keywords) - 5}개"
+            keywords_str = ', '.join(result.primary_keywords[:5])
+            extra_count = len(result.primary_keywords) - 5
+            summary += f"🎯 **핵심**: {keywords_str}"
+            if extra_count > 0:
+                summary += f" 외 {extra_count}개"
             summary += "\n"
 
         if result.related_terms:
-            summary += f"🔗 **관련**: {', '.join(result.related_terms[:3])}"
-            if len(result.related_terms) > 3:
-                summary += f" 외 {len(result.related_terms) - 3}개"
+            keywords_str = ', '.join(result.related_terms[:4])
+            extra_count = len(result.related_terms) - 4
+            summary += f"🔗 **관련**: {keywords_str}"
+            if extra_count > 0:
+                summary += f" 외 {extra_count}개"
             summary += "\n"
-
         return summary
 
-
-# 편의 함수들
-def create_keyword_generator(api_key: Optional[str] = None, model: str = "gpt-4o-mini") -> KeywordGenerator:
+def create_keyword_generator(api_key: Optional[str] = None, model: Optional[str] = None) -> KeywordGenerator:
     """키워드 생성기 인스턴스 생성"""
     return KeywordGenerator(api_key=api_key, model=model)
-
 
 async def generate_keywords_for_topic(topic: str, context: Optional[str] = None) -> KeywordResult:
     """주제에 대한 키워드를 생성하는 편의 함수"""
     generator = create_keyword_generator()
     return await generator.generate_keywords(topic, context)
-
 
 if __name__ == "__main__":
     print("🧪 키워드 생성기 테스트")

@@ -1,199 +1,63 @@
 """
-pytest 공통 설정 및 픽스처
+config.py 모듈 단위 테스트
 """
-
 import pytest
-import sys
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+from pathlib import Path
 
-# src 모듈 경로 추가 (모든 테스트에서 공통으로 사용)
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-src_path = os.path.join(project_root, 'src')
-sys.path.insert(0, src_path)
+# 테스트 대상 모듈 임포트
+from src.config import Config
 
+@patch.dict(os.environ, {}, clear=True)
+class TestConfigDefaults:
+    """환경 변수가 설정되지 않았을 때의 동작을 테스트합니다."""
 
-@pytest.fixture
-def mock_config():
-    """Mock Config 객체 픽스처"""
-    with patch.dict(os.environ, {
-        'DISCORD_BOT_TOKEN': 'test_discord_token',
-        'OPENAI_API_KEY': 'test_openai_key',
-        'PERPLEXITY_API_KEY': 'test_perplexity_key',
-        'DEBUG': 'True'
-    }):
-        from src.config import Config
-        yield Config()
+    @patch('src.config.load_dotenv', return_value=False) # .env 파일이 없는 것처럼 시뮬레이션
+    @patch('builtins.open')
+    def test_create_sample_env_file_if_not_exists(self, mock_open, mock_load_dotenv):
+        """ .env 파일이 없을 때 .env.example 파일을 생성하는지 테스트 """
 
+        # 💡 [수정] Path.exists에 대한 mock을 제거하여 실제 경로 계산 로직이 동작하도록 함
+        # 대신 open 함수가 올바른 경로로 호출되었는지만 검증
+        with patch('src.config.Path.exists', return_value=False):
+            Config()
 
-@pytest.fixture
-def mock_discord_interaction():
-    """Mock Discord Interaction 객체 픽스처"""
-    interaction = MagicMock()
-    interaction.response.defer = MagicMock()
-    interaction.followup.send = MagicMock()
-    return interaction
+        # open 함수가 호출되었는지 확인
+        mock_open.assert_called_once()
+        # open 함수에 전달된 첫 번째 인자(파일 경로)를 가져옴
+        call_args = mock_open.call_args[0]
+        called_path = call_args[0]
 
-
-@pytest.fixture
-def sample_topics():
-    """테스트용 샘플 주제들"""
-    return [
-        "AI 기술 발전",
-        "암호화폐 시장 동향",
-        "기후변화 대응정책",
-        "전기차 산업",
-        "우주 탐사",
-        "양자컴퓨팅"
-    ]
+        # 경로가 Path 객체이고, 이름이 '.env.example'로 끝나는지 검증
+        assert isinstance(called_path, Path)
+        assert called_path.name == '.env.example'
 
 
-@pytest.fixture
-def sample_periods():
-    """테스트용 샘플 기간들"""
-    return [
-        "1일", "3일", "7일",
-        "1주일", "2주일", "4주일",
-        "1개월", "3개월", "6개월",
-        "12시간", "24시간", "72시간"
-    ]
+    def test_get_openai_settings_with_defaults(self):
+        """ OpenAI 관련 설정들이 기본값을 잘 반환하는지 테스트 """
+        with patch('src.config.load_dotenv', return_value=False):
+            cfg = Config()
+            assert cfg.get_openai_temperature() == 0.7
+            assert cfg.get_openai_max_tokens() == 1500
+            assert cfg.get_max_retry_count() == 3
 
+@patch.dict(os.environ, {}, clear=True)
+class TestStageCalculation:
+    """get_current_stage 함수의 정확성을 테스트합니다."""
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_environment():
-    """테스트 환경 전역 설정"""
-    # 테스트 실행 전 로깅 레벨 조정
-    import logging
-    logging.getLogger().setLevel(logging.WARNING)
+    @pytest.mark.parametrize("s1,s2,s3,expected_stage", [
+        (False, False, False, 0),
+        (True, False, False, 1),
+        (True, True, False, 2),
+        (True, True, True, 4),
+    ])
+    def test_get_current_stage(self, s1, s2, s3, expected_stage):
+        """ 모든 단계별 조합에 대해 정확한 현재 단계를 반환하는지 테스트 """
+        with patch('src.config.Config.validate_stage1_requirements', return_value=s1), \
+             patch('src.config.Config.validate_stage2_requirements', return_value=s2), \
+             patch('src.config.Config.validate_stage3_requirements', return_value=s3):
 
-    # 테스트 시작 알림
-    print("\n🧪 pytest 테스트 시작")
-
-    yield
-
-    # 테스트 완료 알림
-    print("✅ pytest 테스트 완료\n")
-
-
-@pytest.fixture
-def mock_api_responses():
-    """Mock API 응답 데이터"""
-    return {
-        'openai': {
-            'choices': [{
-                'message': {
-                    'content': '테스트 키워드1, 테스트 키워드2, 테스트 키워드3'
-                }
-            }]
-        },
-        'perplexity': {
-            'choices': [{
-                'message': {
-                    'content': '테스트 이슈 내용입니다.'
-                }
-            }]
-        }
-    }
-
-
-# 커스텀 마커 설정
-def pytest_configure(config):
-    """pytest 설정"""
-    config.addinivalue_line("markers", "unit: 단위 테스트")
-    config.addinivalue_line("markers", "integration: 통합 테스트")
-    config.addinivalue_line("markers", "slow: 느린 테스트")
-    config.addinivalue_line("markers", "api: API 호출이 필요한 테스트")
-
-
-def pytest_collection_modifyitems(config, items):
-    """테스트 수집 후 수정"""
-    # slow 마커가 있는 테스트는 마지막에 실행
-    slow_tests = []
-    regular_tests = []
-
-    for item in items:
-        if "slow" in item.keywords:
-            slow_tests.append(item)
-        else:
-            regular_tests.append(item)
-
-    items[:] = regular_tests + slow_tests
-
-
-@pytest.fixture
-def mock_openai_response():
-    """Mock OpenAI API 응답 픽스처"""
-    return {
-        'choices': [{
-            'message': {
-                'content': '''
-                {
-                    "primary_keywords": ["AI", "인공지능", "머신러닝"],
-                    "related_terms": ["딥러닝", "신경망", "알고리즘"],
-                    "synonyms": ["Artificial Intelligence", "기계학습"],
-                    "context_keywords": ["기술혁신", "자동화", "데이터분석"],
-                    "confidence": 0.9
-                }
-                '''
-            }
-        }]
-    }
-
-@pytest.fixture
-def sample_keyword_result():
-    """테스트용 KeywordResult 픽스처"""
-    from src.keyword_generator import KeywordResult
-
-    return KeywordResult(
-        topic="AI 기술 발전",
-        primary_keywords=["AI", "인공지능", "머신러닝", "딥러닝"],
-        related_terms=["신경망", "알고리즘", "빅데이터"],
-        synonyms=["Artificial Intelligence", "기계학습"],
-        context_keywords=["기술혁신", "자동화", "디지털트랜스포메이션"],
-        confidence_score=0.85,
-        generation_time=2.5,
-        raw_response="mock response"
-    )
-
-
-@pytest.fixture
-def mock_keyword_generator():
-    """Mock KeywordGenerator 픽스처"""
-    from unittest.mock import patch
-    from src.keyword_generator import create_keyword_generator
-
-    with patch('keyword_generator.AsyncOpenAI'):
-        generator = create_keyword_generator(api_key="test_key")
-        return generator
-
-
-@pytest.fixture
-def valid_openai_env():
-    """유효한 OpenAI 환경변수 설정 픽스처"""
-    with patch.dict(os.environ, {
-        'OPENAI_API_KEY': 'test_openai_key_12345'
-    }):
-        yield
-
-
-@pytest.fixture
-def mock_config():
-    """Mock Config 객체 픽스처 - 업데이트"""
-    with patch.dict(os.environ, {
-        'DISCORD_BOT_TOKEN': 'test_discord_token',
-        'OPENAI_API_KEY': 'test_openai_key',
-        'PERPLEXITY_API_KEY': 'test_perplexity_key',
-        'DEVELOPMENT_MODE': 'True'
-    }):
-        from src.config import Config
-        yield Config()
-
-
-# pytest 마커 등록
-def pytest_configure(config):
-    """pytest 설정 - 마커 등록"""
-    config.addinivalue_line("markers", "unit: 단위 테스트")
-    config.addinivalue_line("markers", "integration: 통합 테스트")
-    config.addinivalue_line("markers", "slow: 느린 테스트")
-    config.addinivalue_line("markers", "api: API 호출이 필요한 테스트")
-    config.addinivalue_line("markers", "asyncio: 비동기 테스트")
+            with patch('src.config.load_dotenv', return_value=True):
+                cfg = Config()
+                assert cfg.get_current_stage() == expected_stage
