@@ -7,7 +7,7 @@ import asyncio
 import json
 import re
 import time
-from typing import List, Dict, Optional, Any
+from typing import List, Optional, Any
 from dataclasses import dataclass
 from loguru import logger
 
@@ -165,31 +165,44 @@ class KeywordGenerator:
 
         return base_prompt
 
-
     async def _call_llm(self, prompt: str) -> str:
-        """LLM API 호출"""
+        """LLM API 호출 - GPT-4o 최적화 추가"""
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"LLM API 호출 시도 {attempt + 1}/{self.max_retries}")
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+
+                # 기본 파라미터
+                request_params = {
+                    "model": self.model,
+                    "messages": [
                         {
                             "role": "system",
                             "content": "당신은 특정 주제에 대한 깊이 있는 분석을 위해 검색 키워드를 생성하는 IT 전문 분석가입니다. 반드시 유효한 JSON 형식으로만 응답해야 합니다."
                         },
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    timeout=self.timeout
-                )
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "timeout": self.timeout
+                }
+
+                # GPT-4o일 때만 추가 파라미터 적용
+                if self.model == "gpt-4o":
+                    request_params.update({
+                        "frequency_penalty": 0.3,  # 반복 감소
+                        "presence_penalty": 0.3,  # 다양성 증가
+                        "response_format": {"type": "json_object"}  # JSON 모드
+                    })
+                    logger.debug("GPT-4o 최적화 파라미터 적용")
+
+                response = await self.client.chat.completions.create(**request_params)
                 content = response.choices[0].message.content
                 if not content:
                     raise ValueError("LLM 응답이 비어있습니다")
                 return content.strip()
+
             except AuthenticationError as e:
-                logger.error(f"OpenAI 인증 오류: {e.message}")
+                logger.error(f"OpenAI 인증 오류: {e}")
                 raise ValueError("OpenAI API 키가 유효하지 않습니다.") from e
             except Exception as e:
                 error_msg = str(e)
@@ -202,8 +215,6 @@ class KeywordGenerator:
                     else:
                         raise ValueError(f"LLM API 호출 최종 실패: {error_msg}")
                 await asyncio.sleep(2 ** attempt)
-        raise ValueError("모든 재시도에 실패했습니다.")
-
 
     def _parse_response(self, topic: str, raw_response: str, generation_time: float) -> KeywordResult:
         """LLM 응답을 파싱하여 KeywordResult로 변환"""
