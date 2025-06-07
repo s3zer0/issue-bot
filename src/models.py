@@ -47,16 +47,17 @@ class TimelineEvent:
     importance: float
     source: str
 
+
 @dataclass
 class IssueItem:
     """개별 이슈 정보를 담는 데이터 클래스"""
     title: str
     summary: str
     source: str
-    published_date: Optional[str]
     relevance_score: float
     category: str
     content_snippet: str
+    published_date: Optional[str] = None
     detailed_content: Optional[str] = None
     related_entities: List[EntityInfo] = field(default_factory=list)
     impact_analysis: Optional[ImpactAnalysis] = None
@@ -64,6 +65,11 @@ class IssueItem:
     background_context: Optional[str] = None
     detail_collection_time: Optional[float] = None
     detail_confidence: Optional[float] = None
+    technical_core: Optional[str] = None  # 기술적 핵심
+    importance: Optional[str] = None  # 중요도
+    related_keywords: Optional[str] = None  # 관련 키워드
+    technical_analysis: Optional[str] = None  # 핵심 기술 분석 섹션
+    practical_guide: Optional[str] = None  # 실무 적용 가이드 섹션
 
 @dataclass
 class SearchResult:

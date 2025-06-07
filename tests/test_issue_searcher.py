@@ -13,7 +13,6 @@ src_path = os.path.join(project_root, 'src')
 sys.path.insert(0, src_path)
 
 # 의존성 모듈 임포트
-# 💡 [수정] 리팩토링된 구조에 맞춰 import 경로 수정
 from src.issue_searcher import IssueSearcher
 from src.reporting import create_detailed_report_from_search_result, format_detailed_issue_report
 from src.models import KeywordResult, IssueItem, SearchResult
@@ -32,7 +31,6 @@ def sample_keyword_result():
         raw_response="test"
     )
 
-# 💡 [수정] 클래스 레벨의 @pytest.mark.asyncio 데코레이터를 제거합니다.
 class TestIssueSearcher:
     """IssueSearcher 테스트 클래스"""
 
@@ -48,20 +46,37 @@ class TestIssueSearcher:
         assert issue.title == "AI 혁신"
         assert issue.summary == "내용입니다."
 
-    # 💡 [수정] 비동기 함수에만 데코레이터를 개별적으로 적용합니다.
     @pytest.mark.integration
     @pytest.mark.asyncio
     @patch('src.issue_searcher.PerplexityClient')
     async def test_search_issues_with_details(self, mock_client_class, sample_keyword_result):
-        """세부 정보 포함 이슈 검색 통합 테스트"""
+        """ 세부 정보 포함 이슈 검색 통합 테스트"""
         mock_client = AsyncMock()
-        # API의 새로운 형식 '## **...**'에 맞춰 모의 응답 수정
+
         mock_client.search_issues.return_value = {
-            "choices": [{"message": {"content": "## **AI 기술 혁신**\n**요약**: AI가 발전합니다.\n**출처**: Tech Journal"}}]
+            "choices": [{
+                "message": {
+                    "content": "## **AI 기술 혁신**\n**요약**: AI가 발전합니다.\n**출처**: Tech Journal"
+                }
+            }]
         }
+
         mock_client.collect_detailed_information.return_value = {
-            "choices": [{"message": {"content": "상세 내용입니다. **배경 정보**: AI의 역사."}}]
+            "choices": [{
+                "message": {
+                    "content": """### 1. 핵심 기술 분석 (Core Technical Analysis)
+    - **작동 원리**: AI의 기본 원리 설명
+
+    ### 2. 배경 및 맥락 (Background Context)
+    - **역사적 발전**: AI의 역사와 발전 과정
+    - **문제 정의**: AI가 해결하려는 문제들
+
+    ### 3. 심층 영향 분석 (Deep Impact Analysis)
+    - **기술적 영향**: 산업에 미치는 영향"""
+                }
+            }]
         }
+
         mock_client_class.return_value = mock_client
 
         searcher = IssueSearcher(api_key="test_key")
@@ -77,6 +92,9 @@ class TestIssueSearcher:
 
         first_issue = result.issues[0]
         assert "AI 기술 혁신" in first_issue.title
+
+        # background_context가 None이 아닌지 먼저 확인
+        assert first_issue.background_context is not None, "배경 정보가 수집되어야 합니다."
         assert "AI의 역사" in first_issue.background_context, "배경 정보가 올바르게 파싱되어야 합니다."
 
 

@@ -19,7 +19,7 @@ except ImportError as e:
 
 # --- 💡 테스트 파라미터 💡 ---
 TEST_TOPIC = "iOS"
-TEST_PERIOD = "1달"
+TEST_PERIOD = "3일"
 COLLECT_DETAILS = True # 세부 분석 실행 여부 (True/False)
 
 async def main():
