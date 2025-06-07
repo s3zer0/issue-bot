@@ -16,8 +16,6 @@ from src.config import Config
 from src.keyword_generator import KeywordGenerator
 from src.bot import monitor_command
 
-
-# 'fixture not found' 오류 해결을 위해 fixture를 파일 내에 직접 정의
 @pytest.fixture
 def mock_discord_interaction():
     """Mock Discord Interaction 객체 픽스처"""
@@ -77,17 +75,13 @@ async def test_keyword_generator_retry_logic(mock_config):
 @pytest.mark.asyncio
 @patch('src.bot.generate_keywords_for_topic')
 @patch('src.bot.config')
-async def test_monitor_command_general_exception(
-    mock_config, mock_generate_keywords, mock_discord_interaction # 이제 conftest.py의 fixture가 주입됩니다.
-):
-    """
-    [bot.py] /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트
-    """
+async def test_monitor_command_general_exception(mock_config, mock_generate_keywords, mock_discord_interaction):
+    """[bot.py] /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트"""
     mock_config.get_current_stage.return_value = 4
     error_message = "예상치 못한 심각한 오류"
     mock_generate_keywords.side_effect = Exception(error_message)
 
-    await monitor_command.callback(mock_discord_interaction, 주제="오류 테스트", 기간="1일", 세부분석=True)
+    await monitor_command.callback(mock_discord_interaction, 주제="오류 테스트", 기간="1일")
 
     final_call_args = mock_discord_interaction.followup.send.call_args
     sent_embed = final_call_args.kwargs['embed']

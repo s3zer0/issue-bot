@@ -1,7 +1,14 @@
-# tests/test_reporting.py
 import pytest
-from src.reporting import format_search_summary, format_detailed_issue_report
-from src.models import SearchResult, IssueItem, KeywordResult
+import sys
+import os
+
+# 경로 설정
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from src.reporting import format_search_summary, format_detailed_issue_report, create_detailed_report_from_search_result
+from src.models import SearchResult, IssueItem
 
 @pytest.fixture
 def sample_search_result():
@@ -20,23 +27,15 @@ class TestReporting:
     def test_format_search_summary(self, sample_search_result):
         """검색 결과 요약 포맷팅을 테스트합니다."""
         summary = format_search_summary(sample_search_result)
-        assert "이슈 검색 완료" in summary
+        assert "검증된 이슈 발견" in summary
         assert "이슈 1" in summary
         assert "이슈 2" in summary
         assert "관련도: 80%" in summary
 
-    def test_format_detailed_issue_report(self):
-        """상세 이슈 보고서 포맷팅을 테스트합니다."""
-        issue = IssueItem(
-            title="상세 이슈", summary="요약", source="출처", relevance_score=0.9,
-            published_date="2024-01-03", category="news", content_snippet="...",
-            detailed_content="이것은 상세 내용입니다.",
-            background_context="이것은 배경 정보입니다.",
-            detail_confidence=0.85
-        )
-        report = format_detailed_issue_report(issue)
-        assert "# 📋 상세 이슈" in report
-        assert "## 📖 상세 내용" in report
-        assert "이것은 상세 내용입니다." in report
-        assert "## 🔗 배경 정보" in report
-        assert "이것은 배경 정보입니다." in report
+    def test_create_detailed_report_from_search_result(self, sample_search_result):
+        """상세 보고서 생성 함수를 테스트합니다."""
+        report = create_detailed_report_from_search_result(sample_search_result)
+        assert "# 🔍 종합 이슈 분석 보고서" in report
+        assert "키워드: 테스트" in report
+        assert "## 📋 이슈 2" in report # 상세 내용이 있는 이슈2만 포함되어야 함
+        assert "이슈 1" not in report # 상세 내용이 없는 이슈1은 포함되지 않아야 함
