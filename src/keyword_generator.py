@@ -1,6 +1,7 @@
 """
 키워드 생성 모듈
-LLM을 활용하여 주제 기반 키워드를 자동 생성
+- LLM(OpenAI)을 활용하여 주제 기반 키워드를 자동 생성합니다.
+- 생성된 키워드는 이슈 모니터링, 검색 최적화, 분석에 사용됩니다.
 """
 
 import asyncio
@@ -15,16 +16,26 @@ try:
     from openai import AsyncOpenAI, AuthenticationError
 except ImportError:
     logger.error("OpenAI 라이브러리가 설치되지 않았습니다. 'pip install openai'를 실행해주세요.")
-    class AsyncOpenAI: pass
-    class AuthenticationError(Exception): pass
+    class AsyncOpenAI: pass  # OpenAI 라이브러리 미설치 시 더미 클래스 정의
+    class AuthenticationError(Exception): pass  # 더미 예외 클래스 정의
 
-from src.config import config
-from src.models import KeywordResult # 중앙 데이터 모델 import
+from src.config import config  # 환경 설정 로드
+from src.models import KeywordResult  # 중앙 데이터 모델 import
 
 
 @dataclass
 class KeywordResult:
-    """키워드 생성 결과를 담는 데이터 클래스 (synonyms 필드 제거)"""
+    """키워드 생성 결과를 구조화된 형태로 저장하는 데이터 클래스.
+
+    Attributes:
+        topic (str): 키워드 생성의 기반이 되는 주제.
+        primary_keywords (List[str]): 주제의 본질을 포착하는 핵심 키워드.
+        related_terms (List[str]): 고유명사, 제품명, 최신 용어 등 관련 용어.
+        context_keywords (List[str]): 주제의 산업, 정책, 사회적 맥락 관련 키워드.
+        confidence_score (float): 생성된 키워드의 신뢰도 점수 (0.0 ~ 1.0).
+        generation_time (float): 키워드 생성에 소요된 시간 (초).
+        raw_response (str): LLM의 원본 응답 데이터.
+    """
     topic: str
     primary_keywords: List[str]
     related_terms: List[str]
@@ -35,9 +46,21 @@ class KeywordResult:
 
 
 class KeywordGenerator:
-    """LLM 기반 키워드 생성기"""
+    """OpenAI LLM을 활용한 키워드 생성 클래스.
+
+    주제와 맥락을 기반으로 전문적이고 검색에 최적화된 키워드를 생성합니다.
+    """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        """KeywordGenerator 인스턴스를 초기화합니다.
+
+        Args:
+            api_key (Optional[str]): OpenAI API 키. None일 경우 환경 변수에서 로드.
+            model (Optional[str]): 사용할 LLM 모델. None일 경우 기본 모델 사용.
+
+        Raises:
+            ValueError: API 키가 제공되지 않거나 유효하지 않을 경우.
+        """
         self.api_key = api_key or config.get_openai_api_key()
         self.model = model or config.get_openai_model()
 
@@ -45,10 +68,10 @@ class KeywordGenerator:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다")
 
         self.client = AsyncOpenAI(api_key=self.api_key)
-        self.max_retries = config.get_max_retry_count()
-        self.timeout = config.get_keyword_generation_timeout()
-        self.temperature = config.get_openai_temperature()
-        self.max_tokens = config.get_openai_max_tokens()
+        self.max_retries = config.get_max_retry_count()  # 최대 재시도 횟수
+        self.timeout = config.get_keyword_generation_timeout()  # 요청 타임아웃
+        self.temperature = config.get_openai_temperature()  # LLM 응답 다양성 조절
+        self.max_tokens = config.get_openai_max_tokens()  # 최대 토큰 수
         logger.info(f"KeywordGenerator 초기화 완료 (모델: {self.model})")
 
     async def generate_keywords(
@@ -57,7 +80,20 @@ class KeywordGenerator:
         context: Optional[str] = None,
         num_keywords: int = 50
     ) -> KeywordResult:
-        """주제에 대한 키워드를 생성합니다"""
+        """주제와 선택적 맥락을 기반으로 키워드를 비동기적으로 생성합니다.
+
+        Args:
+            topic (str): 키워드 생성의 기반 주제.
+            context (Optional[str]): 주제에 대한 추가 맥락 정보.
+            num_keywords (int): 생성할 키워드의 목표 개수. 기본값은 50.
+
+        Returns:
+            KeywordResult: 생성된 키워드와 메타데이터를 포함한 결과 객체.
+
+        Raises:
+            ValueError: 주제가 비어 있거나 유효하지 않을 경우.
+            Exception: LLM 호출 또는 응답 파싱 중 오류 발생 시.
+        """
         start_time = time.time()
         logger.info(f"키워드 생성 시작: '{topic}' (모델: {self.model})")
 
@@ -67,8 +103,13 @@ class KeywordGenerator:
         topic = topic.strip()
 
         try:
+            # 1. LLM에 보낼 프롬프트 생성
             prompt = self._build_prompt(topic, context, num_keywords)
+
+            # 2. LLM 호출로 원본 응답 수집
             raw_response = await self._call_llm(prompt)
+
+            # 3. 응답 파싱 및 결과 객체 생성
             keyword_result = self._parse_response(topic, raw_response, time.time() - start_time)
 
             logger.success(
@@ -82,10 +123,18 @@ class KeywordGenerator:
             raise
 
     def _build_prompt(self, topic: str, context: Optional[str], num_keywords: int) -> str:
-        """
-        모든 주제에 대해 전문적이고 기술적인 키워드 생성을 위한 상세한 범용 프롬프트
-        """
+        """LLM에 전달할 키워드 생성 프롬프트를 구성합니다.
 
+        전문적이고 검색에 최적화된 키워드를 생성하도록 상세한 지침을 포함합니다.
+
+        Args:
+            topic (str): 키워드 생성의 기반 주제.
+            context (Optional[str]): 추가 맥락 정보.
+            num_keywords (int): 생성할 키워드의 목표 개수.
+
+        Returns:
+            str: 구성된 프롬프트 문자열.
+        """
         base_prompt = f"""주제 "{topic}"에 대한 전문적이고 심층적인 이슈 모니터링을 위한 고품질 검색 키워드를 생성해주세요.
 
 **목적**: 생성된 키워드는 최신 뉴스, 기술 문서, 연구 논문, 업계 보고서에서 해당 주제와 관련된 가장 중요하고 시의적절한 정보를 찾는 데 사용됩니다.
@@ -140,7 +189,8 @@ class KeywordGenerator:
 5. **언어 선택 기준**:
    - 한국어/영어는 해당 용어가 실제로 더 많이 사용되는 형태로 선택
    - 국제 표준이나 고유명사는 원어 그대로 사용
-   - 한국 특유의 맥락이나 용어가 있다면 포함"""
+   - 한국 특유의 맥락이나 용어가 있다면 포함
+"""
 
         if context:
             base_prompt += f"\n\n**추가 맥락 정보**: {context}"
@@ -166,12 +216,24 @@ class KeywordGenerator:
         return base_prompt
 
     async def _call_llm(self, prompt: str) -> str:
-        """LLM API 호출 - GPT-4o 최적화 추가"""
+        """OpenAI LLM API를 호출하여 키워드를 생성합니다.
+
+        GPT-4o 모델에 최적화된 파라미터를 적용하며, 재시도 로직을 포함합니다.
+
+        Args:
+            prompt (str): LLM에 전달할 프롬프트.
+
+        Returns:
+            str: LLM의 원본 응답 문자열.
+
+        Raises:
+            ValueError: API 인증 실패, 사용량 초과, 크레딧 부족 등으로 최종 실패 시.
+        """
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"LLM API 호출 시도 {attempt + 1}/{self.max_retries}")
 
-                # 기본 파라미터
+                # 기본 요청 파라미터 설정
                 request_params = {
                     "model": self.model,
                     "messages": [
@@ -186,15 +248,16 @@ class KeywordGenerator:
                     "timeout": self.timeout
                 }
 
-                # GPT-4o일 때만 추가 파라미터 적용
+                # GPT-4o 모델일 경우 추가 최적화 파라미터 적용
                 if self.model == "gpt-4o":
                     request_params.update({
-                        "frequency_penalty": 0.3,  # 반복 감소
-                        "presence_penalty": 0.3,  # 다양성 증가
-                        "response_format": {"type": "json_object"}  # JSON 모드
+                        "frequency_penalty": 0.3,  # 반복된 단어 사용 억제
+                        "presence_penalty": 0.3,  # 새로운 주제 탐색 장려
+                        "response_format": {"type": "json_object"}  # JSON 출력 강제
                     })
                     logger.debug("GPT-4o 최적화 파라미터 적용")
 
+                # API 호출 및 응답 처리
                 response = await self.client.chat.completions.create(**request_params)
                 content = response.choices[0].message.content
                 if not content:
@@ -214,27 +277,42 @@ class KeywordGenerator:
                         raise ValueError("OpenAI 크레딧이 부족합니다.")
                     else:
                         raise ValueError(f"LLM API 호출 최종 실패: {error_msg}")
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2 ** attempt)  # 지수 백오프 재시도
 
     def _parse_response(self, topic: str, raw_response: str, generation_time: float) -> KeywordResult:
-        """LLM 응답을 파싱하여 KeywordResult로 변환"""
+        """LLM 응답을 파싱하여 KeywordResult 객체로 변환합니다.
+
+        Args:
+            topic (str): 키워드 생성의 기반 주제.
+            raw_response (str): LLM의 원본 응답.
+            generation_time (float): 키워드 생성에 소요된 시간.
+
+        Returns:
+            KeywordResult: 파싱된 키워드 결과 객체.
+
+        Raises:
+            ValueError: 응답에 유효한 JSON이 없거나 필수 필드가 누락된 경우.
+        """
         try:
+            # JSON 객체 추출
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw_response, re.DOTALL)
             if not json_match:
                 raise ValueError("응답에서 유효한 JSON을 찾을 수 없습니다")
 
             data = json.loads(json_match.group())
 
-            # [수정됨] 'synonyms' 필드 제거
+            # 필수 필드 확인
             required_fields = ['primary_keywords', 'related_terms', 'context_keywords']
             if not all(field in data for field in required_fields):
                 raise ValueError(f"필수 필드가 누락되었습니다: {required_fields}")
 
+            # 키워드 정제 및 중복 제거
             primary_keywords = self._clean_keywords(data.get('primary_keywords', []))
             related_terms = self._clean_keywords(data.get('related_terms', []))
             context_keywords = self._clean_keywords(data.get('context_keywords', []))
             confidence_score = min(1.0, max(0.0, float(data.get('confidence', 0.8))))
 
+            # 핵심 키워드가 없으면 주제를 기본 키워드로 사용
             if not primary_keywords:
                 primary_keywords = [topic]
                 confidence_score = 0.5
@@ -253,7 +331,14 @@ class KeywordGenerator:
             return self._create_fallback_result(topic, raw_response, generation_time)
 
     def _clean_keywords(self, keywords: List[Any]) -> List[str]:
-        """키워드 리스트를 정제합니다."""
+        """키워드 리스트를 정제하고 중복을 제거합니다.
+
+        Args:
+            keywords (List[Any]): 정제할 원본 키워드 리스트.
+
+        Returns:
+            List[str]: 정제된 고유 키워드 리스트 (최대 12개).
+        """
         if not isinstance(keywords, list):
             logger.warning(f"키워드 데이터가 리스트가 아닙니다: {type(keywords)}")
             return []
@@ -262,9 +347,10 @@ class KeywordGenerator:
         for keyword in keywords:
             if isinstance(keyword, str):
                 keyword = keyword.strip().strip('"\'')
-                if len(keyword) > 1:
+                if len(keyword) > 1:  # 너무 짧은 키워드 제외
                     cleaned.append(keyword)
 
+        # 대소문자 구분 없이 중복 제거
         seen = set()
         unique_keywords = []
         for keyword in cleaned:
@@ -272,10 +358,19 @@ class KeywordGenerator:
             if lower_keyword not in seen:
                 seen.add(lower_keyword)
                 unique_keywords.append(keyword)
-        return unique_keywords[:12]
+        return unique_keywords[:12]  # 최대 12개로 제한
 
     def _create_fallback_result(self, topic: str, raw_response: str, generation_time: float) -> KeywordResult:
-        """파싱 실패 시 기본 키워드 결과 생성"""
+        """응답 파싱 실패 시 기본 결과를 생성합니다.
+
+        Args:
+            topic (str): 키워드 생성의 기반 주제.
+            raw_response (str): LLM의 원본 응답.
+            generation_time (float): 키워드 생성에 소요된 시간.
+
+        Returns:
+            KeywordResult: 기본 키워드와 낮은 신뢰도를 포함한 결과 객체.
+        """
         logger.warning("파싱 실패로 인한 폴백 키워드 생성")
         basic_keywords = [topic.strip()]
         words = topic.split()
@@ -295,12 +390,26 @@ class KeywordGenerator:
         )
 
     def get_all_keywords(self, result: KeywordResult) -> List[str]:
-        """[수정됨] 모든 키워드를 하나의 리스트로 반환"""
+        """모든 키워드 카테고리를 단일 리스트로 결합하여 반환합니다.
+
+        Args:
+            result (KeywordResult): 키워드 결과 객체.
+
+        Returns:
+            List[str]: 중복 제거된 전체 키워드 리스트.
+        """
         all_keywords = (result.primary_keywords + result.related_terms + result.context_keywords)
         return list(dict.fromkeys(all_keywords))
 
     def format_keywords_summary(self, result: KeywordResult) -> str:
-        """키워드 결과를 요약 문자열로 포맷팅"""
+        """키워드 결과를 읽기 쉬운 요약 문자열로 포맷팅합니다.
+
+        Args:
+            result (KeywordResult): 요약할 키워드 결과 객체.
+
+        Returns:
+            str: 포맷팅된 요약 문자열.
+        """
         total_count = len(self.get_all_keywords(result))
         confidence_percent = int(result.confidence_score * 100)
 
@@ -324,14 +433,33 @@ class KeywordGenerator:
             summary += "\n"
         return summary
 
+
 def create_keyword_generator(api_key: Optional[str] = None, model: Optional[str] = None) -> KeywordGenerator:
-    """키워드 생성기 인스턴스 생성"""
+    """KeywordGenerator 인스턴스를 생성하는 팩토리 함수.
+
+    Args:
+        api_key (Optional[str]): OpenAI API 키. None일 경우 환경 변수에서 로드.
+        model (Optional[str]): 사용할 LLM 모델. None일 경우 기본 모델 사용.
+
+    Returns:
+        KeywordGenerator: 초기화된 KeywordGenerator 인스턴스.
+    """
     return KeywordGenerator(api_key=api_key, model=model)
 
+
 async def generate_keywords_for_topic(topic: str, context: Optional[str] = None) -> KeywordResult:
-    """주제에 대한 키워드를 생성하는 편의 함수"""
+    """주제에 대한 키워드를 생성하는 고수준 래퍼 함수.
+
+    Args:
+        topic (str): 키워드 생성의 기반 주제.
+        context (Optional[str]): 추가 맥락 정보.
+
+    Returns:
+        KeywordResult: 생성된 키워드 결과 객체.
+    """
     generator = create_keyword_generator()
     return await generator.generate_keywords(topic, context)
+
 
 if __name__ == "__main__":
     print("🧪 키워드 생성기 테스트")

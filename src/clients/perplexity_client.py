@@ -1,171 +1,152 @@
-# src/clients/perplexity_client.py
 """
-Perplexity AI API 클라이언트 모듈 - 개선된 프롬프트 버전
+Perplexity AI API와의 통신을 전담하는 클라이언트 모듈.
+
+이 모듈은 Perplexity API와 관련된 모든 HTTP 요청, 인증, 재시도 로직을 캡슐화하여
+다른 비즈니스 로직 모듈들이 API의 세부 구현에 대해 알 필요가 없도록 합니다.
 """
 
 import asyncio
 import httpx
 from typing import Dict, Any, List, Optional
 from loguru import logger
-from src.config import config
+from src.config import config  # 환경 설정 관리 모듈
 
 
 class PerplexityClient:
-    """Perplexity API 통신을 전담하는 클라이언트"""
+    """Perplexity API 호출을 위한 비동기 클라이언트.
+
+    Attributes:
+        api_key (str): Perplexity API 키.
+        base_url (str): API의 기본 URL.
+        model (str): 사용할 LLM 모델 이름.
+        timeout (int): HTTP 요청 타임아웃 시간(초).
+        max_retries (int): 실패 시 최대 재시도 횟수.
+        headers (Dict[str, str]): 모든 요청에 사용될 공통 HTTP 헤더.
+    """
 
     def __init__(self, api_key: Optional[str] = None):
+        """PerplexityClient 인스턴스를 초기화합니다.
+
+        Args:
+            api_key (Optional[str]): 사용할 API 키. None이면 config에서 가져옵니다.
+
+        Raises:
+            ValueError: API 키가 설정되지 않았을 경우.
+        """
+        # API 키 설정: 인자로 받은 키가 없으면 config에서 가져옴
         self.api_key = api_key or config.get_perplexity_api_key()
         if not self.api_key:
             raise ValueError("Perplexity API 키가 설정되지 않았습니다")
 
+        # API 요청에 필요한 기본 설정
         self.base_url = "https://api.perplexity.ai/chat/completions"
-        self.model = "llama-3.1-sonar-large-128k-online"
-        self.timeout = 100
-        self.max_retries = 3
+        self.model = "llama-3.1-sonar-large-128k-online"  # 사용할 LLM 모델
+        self.timeout = 60  # HTTP 요청 타임아웃 (초)
+        self.max_retries = 3  # 최대 재시도 횟수
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {self.api_key}",  # 인증 헤더
+            "Content-Type": "application/json"  # 요청 본문 형식
         }
         logger.info(f"PerplexityClient 초기화 완료 (모델: {self.model})")
 
-    async def _make_api_call(self, prompt: str, system_prompt: str = None) -> Dict[str, Any]:
-        """API 호출 공통 로직"""
-        if system_prompt is None:
-            system_prompt = "You are a precise and objective information analysis expert specializing in finding and analyzing the latest technical information, research papers, and industry news."
+    async def _make_api_call(self, prompt: str) -> Dict[str, Any]:
+        """API 호출 공통 로직.
 
+        지수 백오프(exponential backoff)를 사용한 재시도 로직을 포함합니다.
+
+        Args:
+            prompt (str): LLM에 전달할 프롬프트.
+
+        Returns:
+            Dict[str, Any]: API로부터 받은 JSON 응답.
+
+        Raises:
+            ValueError: 여러 번의 재시도 후에도 API 호출에 실패했을 경우.
+            httpx.HTTPStatusError: 429(Too Many Requests) 이외의 HTTP 오류 발생 시.
+        """
+        # 프롬프트의 일부를 로깅 (너무 길 경우 200자로 제한)
+        logger.debug(f"Perplexity API 요청 프롬프트:\n---\n{prompt[:200]}...\n---")
+
+        # API 요청 페이로드 구성
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": "You are a precise and objective information analysis expert."},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 10000,
-            "temperature": 0.3
+            "max_tokens": 10000,  # 최대 응답 토큰 수
+            "temperature": 0.3  # 응답의 창의성 조절 (낮을수록 보수적)
         }
+
+        # 비동기 HTTP 클라이언트 생성
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             for attempt in range(self.max_retries):
                 try:
+                    # API POST 요청 실행
                     response = await client.post(self.base_url, headers=self.headers, json=payload)
-                    response.raise_for_status()
-                    return response.json()
+                    response.raise_for_status()  # 2xx가 아닌 상태 코드에 대해 예외 발생
+                    return response.json()  # 성공 시 JSON 응답 반환
                 except httpx.HTTPStatusError as e:
+                    # HTTP 상태 코드 에러 처리
                     logger.error(f"API HTTP Error (Status: {e.response.status_code}): {e.response.text}")
-                    if e.response.status_code == 429:
-                        await asyncio.sleep(2 ** attempt)
+                    if e.response.status_code == 429:  # Rate Limit 오류 시
+                        wait_time = 2 ** attempt  # 지수 백오프 시간 계산
+                        logger.warning(f"Rate limit 초과. {wait_time}초 후 재시도... ({attempt + 1}/{self.max_retries})")
+                        await asyncio.sleep(wait_time)
                         continue
-                    raise
+                    raise  # 다른 HTTP 오류는 즉시 예외 발생
                 except httpx.RequestError as e:
+                    # 네트워크 요청 에러 처리
                     logger.error(f"API Request Error (Attempt {attempt + 1}): {e}")
                     if attempt == self.max_retries - 1:
-                        raise
-        raise ValueError("API call failed after multiple retries.")
+                        raise ValueError("API 호출이 모든 재시도에 실패했습니다.")
+
+        # 모든 재시도 실패 시 예외 발생
+        raise ValueError("API 호출이 모든 재시도에 실패했습니다.")
 
     async def search_issues(self, keywords: List[str], time_period: str, max_results: int) -> Dict[str, Any]:
-        """이슈 목록 검색을 위한 상세한 프롬프트 생성 및 API 호출"""
+        """이슈 목록 검색을 위한 프롬프트 생성 및 API 호출.
 
-        # 시스템 프롬프트를 전문 검색에 특화
-        system_prompt = """You are an expert information analyst specializing in finding cutting-edge technical information, breaking news, and industry developments. 
-        You have access to the latest web content and prioritize accuracy, technical depth, and relevance.
-        Always base your responses on actual content from specific articles, papers, or documents - never summarize from website homepages or article listings."""
+        Args:
+            keywords (List[str]): 검색할 키워드 목록.
+            time_period (str): 검색 대상 기간 (예: '최근 1주일').
+            max_results (int): 반환할 최대 결과 수.
 
-        prompt = f"""Search for and analyze up to {max_results} individual articles, technical documents, research papers, or news items related to the keywords: '{", ".join(keywords)}' published during '{time_period}'.
+        Returns:
+            Dict[str, Any]: API로부터 받은 JSON 응답.
+        """
+        # 검색 요청을 위한 프롬프트 구성
+        prompt = f"""'{", ".join(keywords)}' 키워드와 관련하여 '{time_period}' 동안 발행된 **개별 뉴스 기사, 블로그 포스트, 기술 문서**를 최대 {max_results}개 찾아줘.
 
-**CRITICAL REQUIREMENTS:**
+        **요구사항:**
+        - 반드시 각 '개별 문서'의 내용을 기반으로 응답해야 해.
+        - 절대로 웹사이트의 메인 페이지나 기사 목록 페이지만 보고 요약해서는 안 돼.
+        - 아래 형식을 반드시 준수해서, 각 기사 정보를 개별 항목으로 만들어줘.
 
-1. **Source Quality**:
-   - Prioritize primary sources: official announcements, technical blogs, research papers, security advisories
-   - Include sources from: major tech companies, research institutions, security vendors, open-source projects
-   - Avoid: aggregator sites, forums (unless highly technical), marketing materials
+        ## **[기사 제목]**
+        **요약**: [기사 내용 요약]
+        **출처**: [출처 웹사이트 이름 또는 URL]
+        **발행일**: [발행 일자]
+        **카테고리**: [뉴스, 블로그, 기술문서 등]"""
 
-2. **Content Depth**:
-   - Each item must be based on the actual content of a specific article/document
-   - Include technical specifications, version numbers, dates, and quantitative data
-   - Capture unique insights, findings, or announcements from each source
-
-3. **Information Extraction**:
-   - Technical details: specifications, architectures, algorithms, vulnerabilities
-   - Concrete facts: numbers, dates, names, versions, CVE IDs
-   - Impact analysis: who is affected, scale of impact, criticality
-   - Novel aspects: what's new, what changed, why it matters
-
-**OUTPUT FORMAT (strictly follow for each item):**
-
-## **[Specific, descriptive title of the article/finding]**
-**요약**: [Detailed summary including key technical points, findings, and implications - minimum 3-4 sentences]
-**기술적 핵심**: [Key technical details, specifications, or metrics]
-**출처**: [Exact source name and/or URL]
-**발행일**: [YYYY-MM-DD format]
-**카테고리**: [Research/Security/News/Technical/Industry/Policy]
-**중요도**: [Critical/High/Medium/Low - with brief justification]
-**관련 키워드**: [Additional relevant terms found in the article]
-
-**QUALITY CHECKS:**
-- Is this from an actual article, not a website listing?
-- Does it contain specific, verifiable information?
-- Would a technical expert find this valuable?
-- Is it relevant to the search timeframe?"""
-
-        return await self._make_api_call(prompt, system_prompt)
+        # 공통 API 호출 메서드 실행
+        return await self._make_api_call(prompt)
 
     async def collect_detailed_information(self, issue_title: str) -> Dict[str, Any]:
-        """상세 정보 수집을 위한 심층적인 프롬프트 생성 및 API 호출"""
+        """상세 정보 수집을 위한 프롬프트 생성 및 API 호출.
 
-        system_prompt = """You are a senior technical analyst providing in-depth analysis of technology issues, security vulnerabilities, and industry developments.
-        Your analysis should be suitable for technical professionals and decision-makers who need comprehensive understanding of complex topics.
-        Always provide accurate, verifiable information with proper technical context."""
+        Args:
+            issue_title (str): 상세 정보를 수집할 이슈 제목.
 
-        prompt = f"""Provide a comprehensive, expert-level analysis in Korean for: **{issue_title}**
+        Returns:
+            Dict[str, Any]: API로부터 받은 JSON 응답.
+        """
+        # 상세 정보 요청을 위한 프롬프트 구성
+        prompt = f"""다음 이슈에 대해 **한국어로 상세하게 분석**해줘: **{issue_title}**.
+        상세 내용과 함께, 해당 이슈가 발생하게 된 **배경 정보(Background Context)**도 찾아서 포함해줘."""
 
-**ANALYSIS FRAMEWORK:**
+        # 요청 로깅 (제목의 일부만 기록)
+        logger.info(f"상세 정보 요청: {issue_title[:50]}...")
 
-### 1. 핵심 기술 분석 (Core Technical Analysis)
-- **작동 원리**: 기술적 메커니즘과 아키텍처 상세 설명
-- **구현 세부사항**: 코드 레벨, API, 프로토콜 등 구체적 정보
-- **기술 사양**: 버전, 의존성, 시스템 요구사항
-- **성능 지표**: 벤치마크, 처리량, 지연시간 등 정량적 데이터
-
-### 2. 배경 및 맥락 (Background Context)
-- **역사적 발전**: 이 기술/이슈가 등장하게 된 배경과 진화 과정
-- **문제 정의**: 해결하려는 근본적인 문제나 니즈
-- **선행 기술**: 관련된 이전 기술들과의 관계
-- **산업 동향**: 현재 시장 상황과 기술 트렌드
-
-### 3. 심층 영향 분석 (Deep Impact Analysis)
-- **기술적 영향**: 
-  - 어떤 시스템/플랫폼이 영향을 받는가?
-  - 기존 인프라에 미치는 변화
-  - 보안 implications (취약점, 위협, 방어)
-- **비즈니스 영향**:
-  - 비용 절감 또는 추가 비용
-  - 생산성 및 효율성 변화
-  - 경쟁 우위 요소
-- **사용자 영향**:
-  - 최종 사용자 경험 변화
-  - 학습 곡선 및 적응 필요성
-
-### 4. 실무 적용 가이드 (Practical Implementation)
-- **도입 전략**: 단계별 구현 방법
-- **모범 사례**: 업계 best practices
-- **주의사항**: 흔한 실수와 함정
-- **리소스**: 도구, 라이브러리, 문서 링크
-
-### 5. 전문가 관점 (Expert Perspectives)
-- **기술 커뮤니티 반응**: 주요 의견과 논쟁점
-- **장단점 분석**: 객관적인 강점과 약점
-- **대안 기술**: 경쟁 또는 보완 솔루션
-- **미래 전망**: 발전 방향과 잠재력
-
-### 6. 추가 정보 (Additional Intelligence)
-- **관련 표준/규격**: ISO, IEEE, RFC 등
-- **법적/규제 고려사항**: 컴플라이언스, 라이선스
-- **참고 자료**: 논문, 공식 문서, 깃허브 저장소
-
-**작성 지침:**
-- 기술 용어는 정확히 사용하되, 필요시 한글 설명 병기
-- 추측보다는 검증된 사실과 데이터 중심
-- 구체적인 예시와 사례 포함
-- 실무자가 즉시 활용 가능한 정보 제공
-- 비판적 시각과 균형잡힌 분석 유지"""
-
-        logger.info(f"Requesting detailed analysis for: {issue_title[:50]}...")
-        return await self._make_api_call(prompt, system_prompt)
+        # 공통 API 호출 메서드 실행
+        return await self._make_api_call(prompt)
