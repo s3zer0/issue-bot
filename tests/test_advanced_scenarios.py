@@ -11,7 +11,7 @@ from src.config import Config
 from src.keyword_generator import KeywordGenerator
 from src.bot import monitor_command
 
-# 💡 [수정] 'fixture not found' 오류 해결을 위해 fixture를 파일 내에 직접 정의
+# 'fixture not found' 오류 해결을 위해 fixture를 파일 내에 직접 정의
 @pytest.fixture
 def mock_discord_interaction():
     """Mock Discord Interaction 객체 픽스처"""

@@ -243,14 +243,18 @@ async def monitor_command(
                 # 상세 보고서 파일 첨부
                 if search_result.detailed_issues_count > 0:
                     detailed_report = create_detailed_report_from_search_result(search_result)
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-                        f.write(detailed_report)
-                        temp_file_path = f.name
+                    reports_dir = "reports"
+                    os.makedirs(reports_dir, exist_ok=True)
 
-                    filename = f"issue_report_{주제.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.md"
-                    with open(temp_file_path, 'rb') as f:
+                    filename = f"issue_report_{주제.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+                    file_path = os.path.join(reports_dir, filename)
+
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(detailed_report)
+
+                    # Discord에 파일 전송
+                    with open(file_path, 'rb') as f:
                         await interaction.followup.send(embed=success_embed, file=discord.File(f, filename=filename))
-                    os.unlink(temp_file_path)
                 else:
                     await interaction.followup.send(embed=success_embed)
 

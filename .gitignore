@@ -36,6 +36,7 @@ env/
 logs/
 *.log
 *.log.*
+reports/
 
 # 테스트 및 커버리지
 .pytest_cache/

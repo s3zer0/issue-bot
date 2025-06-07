@@ -39,7 +39,7 @@ class TestConfig:
         mock_open.assert_called_once()
         assert '.env.example' in str(mock_open.call_args[0][0])
 
-    # [추가] is_development_mode 테스트
+    # is_development_mode 테스트
     @pytest.mark.parametrize("env_value,expected", [
         ('true', True), ('True', True), ('false', False), ('', False), (None, False)
     ])

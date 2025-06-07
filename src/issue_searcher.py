@@ -95,7 +95,16 @@ class PerplexityClient:
         logger.info(f"PerplexityClient 초기화 완료 (모델: {self.model})")
 
     async def _make_api_call(self, prompt: str) -> Dict[str, Any]:
-        payload = {"model": self.model, "messages": [{"role": "system", "content": "You are a precise and objective information analysis expert."}, {"role": "user", "content": prompt}], "max_tokens": 4096, "temperature": 0.3}
+        payload = {"model": self.model, "messages": [
+            {
+                "role": "system",
+                "content": "You are a precise and objective information analysis expert."
+             },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ], "max_tokens": 10000, "temperature": 0.3 }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             for attempt in range(self.max_retries):
                 try:
@@ -112,16 +121,23 @@ class PerplexityClient:
         raise ValueError("API call failed after multiple retries.")
 
     async def search_issues(self, keywords: List[str], time_period: str, max_results: int) -> Dict[str, Any]:
-        prompt = f"""Keywords: {", ".join(keywords)}. Time Period: {time_period}. Find up to {max_results} relevant issues from recent news, blogs, and academic sources, and summarize them in the following format:
-## **[Title]**
-**요약**: [Summary]
-**출처**: [Source]
-**일자**: [Date]
-**카테고리**: [Category]"""
+        prompt = f"""'{", ".join(keywords)}' 키워드와 관련하여 '{time_period}' 동안 발행된 **개별 뉴스 기사, 블로그 포스트, 기술 문서**를 최대 {max_results}개 찾아줘.
+        
+        **요구사항:**
+        - 반드시 각 '개별 문서'의 내용을 기반으로 응답해야 해.
+        - 절대로 웹사이트의 메인 페이지나 기사 목록 페이지만 보고 요약해서는 안 돼.
+        - 아래 형식을 반드시 준수해서, 각 기사 정보를 개별 항목으로 만들어줘.
+
+        ## **[기사 제목]**
+        **요약**: [기사 내용 요약]
+        **출처**: [출처 웹사이트 이름 또는 URL]
+        **일자**: [발행 일자]
+        **카테고리**: [뉴스, 블로그, 기술문서 등]"""
         return await self._make_api_call(prompt)
 
     async def collect_detailed_information(self, issue_title: str) -> Dict[str, Any]:
-        prompt = f"""Provide a detailed analysis for the following issue: **{issue_title}**. Include detailed content and background context."""
+        prompt = f"""다음 이슈에 대해 **한국어로 상세하게 분석**해줘: **{issue_title}**.
+        상세 내용과 함께, 해당 이슈가 발생하게 된 **배경 정보(Background Context)**도 찾아서 포함해줘."""
         logger.info(f"Requesting detailed info for: {issue_title[:50]}...")
         return await self._make_api_call(prompt)
 
@@ -169,9 +185,14 @@ class IssueSearcher:
 
     def _calculate_relevance_scores(self, issues: List[IssueItem], keyword_result: KeywordResult) -> List[IssueItem]:
         for issue in issues:
-            text_to_check = f"{issue.title} {issue.summary}".lower()
-            score = sum(0.2 for kw in keyword_result.primary_keywords if kw.lower() in text_to_check)
+            text_to_check = f"{issue.title} {issue.summary} {issue.content_snippet}".lower()
+
+            score = sum(0.4 for kw in keyword_result.primary_keywords if kw.lower() in text_to_check)
             score += sum(0.1 for kw in keyword_result.related_terms if kw.lower() in text_to_check)
+
+            if score > 0:
+                score += 0.1
+
             issue.relevance_score = min(1.0, round(score, 2))
         return issues
 
@@ -228,10 +249,21 @@ class IssueSearcher:
             total_detail_time = sum(iss.detail_collection_time for iss in successful_details if iss.detail_collection_time)
             avg_detail_confidence = sum(iss.detail_confidence for iss in successful_details) / detailed_issues_count if detailed_issues_count > 0 else 0.0
 
+            total_relevance_score = sum(iss.relevance_score for iss in top_issues)
+            average_relevance_score = total_relevance_score / len(top_issues) if top_issues else 0.0
+
+            final_confidence_score = (
+                    (average_relevance_score * 0.5) +
+                    (avg_detail_confidence * 0.3) +
+                    (keyword_result.confidence_score * 0.2)
+            )
+
             return SearchResult(
                 query_keywords=search_keywords, total_found=len(top_issues), issues=top_issues,
                 search_time=time.time() - start_time, api_calls_used=1 + (len(top_issues[:self.max_detailed_issues]) if collect_details else 0),
-                confidence_score=0.8, time_period=time_period, raw_responses=[json.dumps(api_response, ensure_ascii=False)],
+                confidence_score=final_confidence_score,
+                time_period=time_period,
+                raw_responses=[json.dumps(api_response, ensure_ascii=False)],
                 detailed_issues_count=detailed_issues_count, total_detail_collection_time=total_detail_time,
                 average_detail_confidence=avg_detail_confidence
             )
@@ -241,10 +273,21 @@ class IssueSearcher:
             return SearchResult(query_keywords=search_keywords, total_found=0, issues=[], search_time=time.time() - start_time, api_calls_used=1, confidence_score=0.1, time_period=time_period, raw_responses=[])
 
     def format_search_summary(self, result: SearchResult) -> str:
-        if result.total_found == 0: return f"**이슈 검색 실패**\n❌ '{', '.join(result.query_keywords)}' 관련 이슈를 찾지 못했습니다."
+        if result.total_found == 0:
+            return f"**이슈 검색 실패**\n❌ '{', '.join(result.query_keywords)}' 관련 이슈를 찾지 못했습니다."
+
         summary = f"**이슈 검색 완료** ({result.total_found}개 발견)\n"
+
+        # 표시할 이슈는 최대 3개로 제한
+        issues_to_display = result.issues[:3]
+
         for i, issue in enumerate(result.issues[:3], 1):
-            summary += f"**{i}. {issue.title}**\n- 출처: {issue.source} | 관련도: {int(issue.relevance_score * 100)}%\n"
+            summary += f"**{i}. {issue.title}**- 출처: {issue.source} | 관련도: {int(issue.relevance_score * 100)}%\n\n"
+
+        if result.total_found > len(issues_to_display):
+            remaining_count = result.total_found - len(issues_to_display)
+            summary += f"**... 외 {remaining_count}개의 이슈가 더 있습니다.**\n"
+
         return summary
 
     def format_detailed_issue_report(self, issue: IssueItem) -> str:

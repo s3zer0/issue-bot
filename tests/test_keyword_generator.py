@@ -14,10 +14,9 @@ class TestKeywordGeneratorAdvanced:
     @pytest.mark.asyncio
     @patch('src.keyword_generator.config')
     async def test_generator_handles_rate_limit_error(self, mock_config):
-        """[커버리지 향상] API 속도 제한(RateLimitError) 오류 처리 테스트"""
+        """API 속도 제한(RateLimitError) 오류 처리 테스트"""
         mock_config.get_max_retry_count.return_value = 1
 
-        # openai 라이브러리의 RateLimitError를 모킹하여 발생
         mock_response = MagicMock()
         mock_response.status_code = 429
         rate_limit_error = RateLimitError("Rate limit exceeded", response=mock_response, body=None)
@@ -31,17 +30,17 @@ class TestKeywordGeneratorAdvanced:
 
     @patch('src.keyword_generator.AsyncOpenAI')
     def test_clean_keywords_with_invalid_input_type(self, mock_openai):
-        """[수정] _clean_keywords에 리스트가 아닌 값이 들어왔을 때 반환 값을 검증"""
+        """_clean_keywords에 리스트가 아닌 값이 들어왔을 때 반환 값을 검증"""
         generator = KeywordGenerator(api_key="fake_key")
 
-        # 💡 caplog 대신, 함수의 반환 값이 빈 리스트인지를 직접 검증
+        # caplog 대신, 함수의 반환 값이 빈 리스트인지를 직접 검증
         assert generator._clean_keywords("이것은 리스트가 아님") == []
         assert generator._clean_keywords({"key": "value"}) == []
 
     @pytest.mark.asyncio
     @patch('src.keyword_generator.config')
     async def test_generator_handles_empty_response(self, mock_config):
-        """[커버리지 향상] LLM 응답 내용은 있으나 비어있는 경우(empty string) 테스트"""
+        """LLM 응답 내용은 있으나 비어있는 경우(empty string) 테스트"""
         mock_config.get_max_retry_count.return_value = 1
 
         mock_response = MagicMock()
@@ -58,12 +57,12 @@ class TestKeywordGeneratorAdvanced:
     # JSON은 유효하나, primary_keywords가 없는 경우의 폴백 테스트
     @patch('src.keyword_generator.AsyncOpenAI')
     def test_parse_response_no_primary_keywords(self, mock_openai):
-        """[수정] JSON에 필수 필드가 없을 때, 폴백 결과를 반환하는지 테스트"""
+        """JSON에 필수 필드가 없을 때, 폴백 결과를 반환하는지 테스트"""
         generator = KeywordGenerator(api_key="fake_key")
         # primary_keywords가 없는 유효한 JSON
         response_content = '{"related_terms": ["c"], "context_keywords": ["d"]}'
 
-        # 💡 [수정] ValueError 대신, 폴백 로직이 실행되는지 검증
+        # ValueError 대신, 폴백 로직이 실행되는지 검증
         result = generator._parse_response("테스트", response_content, 1.0)
 
         # 폴백 결과의 특징인 낮은 신뢰도 점수를 확인

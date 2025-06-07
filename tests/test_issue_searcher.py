@@ -5,7 +5,7 @@
 import pytest
 import sys
 import os
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 # 프로젝트 루트 디렉토리의 src 폴더를 sys.path에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,7 +37,7 @@ class TestIssueSearcher:
     @pytest.mark.unit
     @patch('src.issue_searcher.PerplexityClient')
     def test_parse_issue_section(self, mock_client):
-        """[수정됨] 새로운 API 형식에 맞는 섹션 파싱 테스트"""
+        """새로운 API 형식에 맞는 섹션 파싱 테스트"""
         searcher = IssueSearcher(api_key="test_key")
         # API의 새로운 형식 '## **...**'에 맞춰 테스트 데이터 수정
         section = "## **AI 혁신**\n**요약**: 내용입니다.\n**출처**: 출처\n**일자**: 2024-01-01"
@@ -50,7 +50,7 @@ class TestIssueSearcher:
     @pytest.mark.asyncio
     @patch('src.issue_searcher.PerplexityClient')
     async def test_search_issues_with_details(self, mock_client_class, sample_keyword_result):
-        """[수정됨] 세부 정보 포함 이슈 검색 통합 테스트"""
+        """세부 정보 포함 이슈 검색 통합 테스트"""
         mock_client = AsyncMock()
         # API의 새로운 형식 '## **...**'에 맞춰 모의 응답 수정
         mock_client.search_issues.return_value = {
@@ -82,7 +82,7 @@ class TestConvenienceFunctions:
 
     @pytest.mark.unit
     def test_create_detailed_report_from_search_result(self):
-        """[수정됨] 상세 보고서 생성 편의 함수 테스트"""
+        """상세 보고서 생성 편의 함수 테스트"""
         issue = IssueItem(
             title="AI 기술 혁신", summary="AI가 발전합니다.", source="Tech News",
             published_date="2024-01-15", relevance_score=0.9, category="news",
@@ -96,7 +96,7 @@ class TestConvenienceFunctions:
 
         report = create_detailed_report_from_search_result(search_result)
 
-        # 💡 [수정] 보고서의 실제 내용과 형식을 검증하도록 변경
+        # 보고서의 실제 내용과 형식을 검증하도록 변경
         assert "# 🔍 종합 이슈 분석 보고서" in report
         assert "키워드: AI" in report
         assert "# 📋 AI 기술 혁신" in report
@@ -105,7 +105,7 @@ class TestConvenienceFunctions:
     @pytest.mark.unit
     @patch('src.issue_searcher.PerplexityClient')
     def test_format_detailed_issue_report(self, mock_client_class):
-        """[수정됨] 개별 이슈 상세 보고서 포맷팅 테스트"""
+        """개별 이슈 상세 보고서 포맷팅 테스트"""
         searcher = create_issue_searcher(api_key="test_key")
         issue = IssueItem(
             title="Tesla 신모델", summary="요약 내용.", source="Tesla Blog", published_date="2024-01-15",

@@ -12,7 +12,7 @@ src_path = os.path.join(project_root, 'src')
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from src.bot import monitor_command, help_command, status_command, run_bot, IssueMonitorBot, validate_topic, parse_time_period
+from src.bot import help_command, run_bot, IssueMonitorBot, validate_topic, parse_time_period
 
 # --- Helper Fixtures ---
 @pytest.fixture
