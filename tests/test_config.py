@@ -1,3 +1,4 @@
+# tests/test_config.py
 """
 config.py 모듈 단위 테스트 (최종 완성본)
 """
@@ -5,13 +6,14 @@ import pytest
 import os
 from unittest.mock import patch
 
-# 테스트 대상 모듈 임포트
+# 리팩토링된 구조에 맞춰 import 경로 수정
 from src.config import Config
 
 @patch.dict(os.environ, {}, clear=True)
 class TestConfig:
     """Config 클래스의 다양한 시나리오를 테스트합니다."""
 
+    # ... (test_get_keys_with_valid_values, test_get_keys_return_none_for_placeholder, test_creates_sample_when_no_env_file, test_is_development_mode 는 기존과 동일)
     def test_get_keys_with_valid_values(self):
         """환경 변수가 올바르게 설정되었을 때 키를 잘 반환하는지 테스트"""
         with patch.dict(os.environ, {
@@ -39,24 +41,23 @@ class TestConfig:
         mock_open.assert_called_once()
         assert '.env.example' in str(mock_open.call_args[0][0])
 
-    # is_development_mode 테스트
     @pytest.mark.parametrize("env_value,expected", [
         ('true', True), ('True', True), ('false', False), ('', False), (None, False)
     ])
     def test_is_development_mode(self, env_value, expected):
         """is_development_mode가 환경 변수 값을 올바르게 파싱하는지 테스트"""
-        # os.environ에 값이 없는 경우(None)와 있는 경우를 모두 테스트
         env_dict = {"DEVELOPMENT_MODE": env_value} if env_value is not None else {}
         with patch.dict(os.environ, env_dict, clear=True):
              with patch('src.config.load_dotenv', return_value=True):
                 cfg = Config()
                 assert cfg.is_development_mode() is expected
 
+    # 단계 확인 테스트 로직
     @pytest.mark.parametrize("s1,s2,s3,expected_stage", [
-        (False, False, False, 0),
-        (True, False, False, 1),
-        (True, True, False, 2),
-        (True, True, True, 4),
+        (False, False, False, 0), # 아무것도 없을 때 0단계
+        (True, False, False, 1),  # Discord 토큰만 있을 때 1단계
+        (True, True, False, 2),   # OpenAI 키까지 있을 때 2단계
+        (True, True, True, 4),    # Perplexity 키까지 모두 있을 때 4단계
     ])
     def test_get_current_stage(self, s1, s2, s3, expected_stage):
         """모든 단계별 조합에 대해 정확한 현재 단계를 반환하는지 테스트"""

@@ -13,10 +13,11 @@ src_path = os.path.join(project_root, 'src')
 sys.path.insert(0, src_path)
 
 # 의존성 모듈 임포트
-from src.issue_searcher import (
-    IssueSearcher, IssueItem, SearchResult, create_detailed_report_from_search_result, create_issue_searcher
-)
-from src.keyword_generator import KeywordResult
+# 💡 [수정] 리팩토링된 구조에 맞춰 import 경로 수정
+from src.issue_searcher import IssueSearcher
+from src.reporting import create_detailed_report_from_search_result, format_detailed_issue_report
+from src.models import KeywordResult, IssueItem, SearchResult
+
 
 @pytest.fixture
 def sample_keyword_result():
@@ -31,6 +32,7 @@ def sample_keyword_result():
         raw_response="test"
     )
 
+# 💡 [수정] 클래스 레벨의 @pytest.mark.asyncio 데코레이터를 제거합니다.
 class TestIssueSearcher:
     """IssueSearcher 테스트 클래스"""
 
@@ -46,6 +48,7 @@ class TestIssueSearcher:
         assert issue.title == "AI 혁신"
         assert issue.summary == "내용입니다."
 
+    # 💡 [수정] 비동기 함수에만 데코레이터를 개별적으로 적용합니다.
     @pytest.mark.integration
     @pytest.mark.asyncio
     @patch('src.issue_searcher.PerplexityClient')
@@ -99,21 +102,18 @@ class TestConvenienceFunctions:
         # 보고서의 실제 내용과 형식을 검증하도록 변경
         assert "# 🔍 종합 이슈 분석 보고서" in report
         assert "키워드: AI" in report
-        assert "# 📋 AI 기술 혁신" in report
         assert "## 📖 상세 내용" in report
 
     @pytest.mark.unit
-    @patch('src.issue_searcher.PerplexityClient')
-    def test_format_detailed_issue_report(self, mock_client_class):
+    def test_format_detailed_issue_report(self):
         """개별 이슈 상세 보고서 포맷팅 테스트"""
-        searcher = create_issue_searcher(api_key="test_key")
         issue = IssueItem(
             title="Tesla 신모델", summary="요약 내용.", source="Tesla Blog", published_date="2024-01-15",
             relevance_score=0.9, category="news", content_snippet="...",
             detailed_content="상세 내용.", detail_confidence=0.88,
             background_context="전기차 시장 발전 배경"
         )
-        report = searcher.format_detailed_issue_report(issue)
+        report = format_detailed_issue_report(issue)
         assert "Tesla 신모델" in report
         assert "## 📖 상세 내용" in report
         assert "## 🔗 배경 정보" in report

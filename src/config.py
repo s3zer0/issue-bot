@@ -1,3 +1,4 @@
+# src/config.py
 """
 설정 관리 모듈 (최종 완성본)
 """
@@ -10,12 +11,12 @@ from loguru import logger
 
 class Config:
     """설정 관리 클래스"""
+    # --- 기존 코드 (동일) ---
     def __init__(self):
         self._setup_environment()
         self._load_env_file()
 
     def _setup_environment(self):
-        """프로젝트 루트를 기준으로 Python 경로 설정"""
         try:
             project_root = Path(__file__).resolve().parent.parent
             src_path = project_root / 'src'
@@ -26,7 +27,6 @@ class Config:
             logger.warning(f"환경 설정 중 오류: {e}")
 
     def _load_env_file(self):
-        """python-dotenv를 사용하여 .env 파일을 로드"""
         project_root = Path(os.getenv('PROJECT_ROOT', Path.cwd()))
         env_path = project_root / '.env'
         if not load_dotenv(dotenv_path=env_path):
@@ -45,7 +45,7 @@ class Config:
             logger.info(f"샘플 설정 파일 생성됨: {sample_path}")
         except IOError as e: logger.error(f"샘플 파일 생성 실패: {e}")
 
-    # --- API 키 Getter ---
+    # --- API 키 Getter (기존 코드와 동일) ---
     def get_discord_token(self) -> Optional[str]:
         token = os.getenv('DISCORD_BOT_TOKEN')
         return token if token and 'your_token_here' not in token else None
@@ -58,7 +58,7 @@ class Config:
         api_key = os.getenv('PERPLEXITY_API_KEY')
         return api_key if api_key and 'your_key_here' not in api_key else None
 
-    # --- 설정 Getter (예외 처리 로직 복원) ---
+    # --- 설정 Getter (기존 코드와 동일) ---
     def is_development_mode(self) -> bool:
         return os.getenv('DEVELOPMENT_MODE', 'false').lower() == 'true'
 
@@ -67,7 +67,6 @@ class Config:
 
     def get_openai_model(self) -> str: return os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 
-    # 💡 [수정] try-except 구문을 복원하여 안정성 확보
     def get_openai_temperature(self) -> float:
         try:
             return float(os.getenv('OPENAI_TEMPERATURE', 0.7))
@@ -96,12 +95,15 @@ class Config:
             logger.warning("MAX_RETRY_COUNT 값이 잘못되어 기본값(3)을 사용합니다.")
             return 3
 
-    # --- 단계 검증 ---
+    # --- 단계 검증 (기존 코드와 동일) ---
     def validate_stage1_requirements(self) -> bool: return bool(self.get_discord_token())
     def validate_stage2_requirements(self) -> bool: return self.validate_stage1_requirements() and bool(self.get_openai_api_key())
     def validate_stage3_requirements(self) -> bool: return self.validate_stage2_requirements() and bool(self.get_perplexity_api_key())
 
+    # --- 💡 [수정] 현재 단계 확인 로직 ---
     def get_current_stage(self) -> int:
+        """현재 실행 가능한 최고 단계를 반환합니다."""
+        # 3단계 요구사항(Perplexity 키)까지 모두 만족하면 4단계로 간주
         if self.validate_stage3_requirements(): return 4
         if self.validate_stage2_requirements(): return 2
         if self.validate_stage1_requirements(): return 1

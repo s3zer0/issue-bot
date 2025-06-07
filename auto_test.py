@@ -5,10 +5,11 @@ import os
 from datetime import datetime
 
 # --- 코어 로직 임포트 ---
-# 봇의 핵심 기능을 가져옵니다.
+# 변경된 모듈 구조에 맞춰 import 경로 수정
 try:
     from src.keyword_generator import generate_keywords_for_topic
-    from src.issue_searcher import search_issues_for_keywords, create_detailed_report_from_search_result
+    from src.issue_searcher import search_issues_for_keywords
+    from src.reporting import create_detailed_report_from_search_result, save_report_to_file
     from src.config import config # .env 파일 로드를 위해 import
     print("✅ 자동 테스트에 필요한 모듈을 성공적으로 불러왔습니다.")
 except ImportError as e:
@@ -17,9 +18,8 @@ except ImportError as e:
     exit(1)
 
 # --- 💡 테스트 파라미터 💡 ---
-# 여기에서 테스트하고 싶은 주제와 기간을 자유롭게 수정하세요.
-TEST_TOPIC = "사이버 보안"
-TEST_PERIOD = "최근 1주일"
+TEST_TOPIC = "iOS"
+TEST_PERIOD = "1달"
 COLLECT_DETAILS = True # 세부 분석 실행 여부 (True/False)
 
 async def main():
@@ -54,20 +54,10 @@ async def main():
 
     # 3. 보고서 생성 및 로컬에 저장
     print("\n[3/3] 최종 보고서를 생성하고 로컬에 저장합니다...")
-    if search_result.total_found > 0 and COLLECT_DETAILS:
+    if search_result.total_found > 0 and COLLECT_DETAILS and search_result.detailed_issues_count > 0:
         try:
             report_content = create_detailed_report_from_search_result(search_result)
-
-            # 'reports' 폴더가 없으면 생성
-            reports_dir = "reports"
-            os.makedirs(reports_dir, exist_ok=True)
-
-            # 파일명 설정 및 저장
-            filename = f"auto_report_{TEST_TOPIC.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-            file_path = os.path.join(reports_dir, filename)
-
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(report_content)
+            file_path = save_report_to_file(report_content, TEST_TOPIC) # reporting 모듈 함수 사용
 
             print(f"✅ 보고서 저장을 완료했습니다!")
             print(f"   - 파일 위치: {file_path}")

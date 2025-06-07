@@ -58,7 +58,7 @@ class TestBotEvents:
         """on_ready 이벤트가 상태 메시지를 설정하는지 테스트"""
         bot_instance = IssueMonitorBot()
 
-        # 💡 [수정] bot.user, bot.guilds는 읽기 전용이므로, 내부 _connection 객체를 모킹
+        # bot.user, bot.guilds는 읽기 전용이므로, 내부 _connection 객체를 모킹
         bot_instance._connection = MagicMock()
         bot_instance._connection.user = MagicMock()
         bot_instance._connection.guilds = []
@@ -72,7 +72,7 @@ class TestBotEvents:
         activity = bot_instance.change_presence.call_args.kwargs['activity']
         assert "Stage 4" in activity.name
 
-# 💡 [수정] 동기 함수 테스트를 위한 별도 클래스 분리 (PytestWarning 해결)
+# 동기 함수 테스트를 위한 별도 클래스 분리 (PytestWarning 해결)
 class TestRunBot:
     """run_bot 함수의 실행 경로를 테스트합니다."""
     @patch('src.bot.config')
