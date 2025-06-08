@@ -125,3 +125,30 @@ class CombinedHallucinationScore:
             report += f"{score.get_summary()}\n"
 
         return report
+
+
+@dataclass
+class LLMJudgeScore(HallucinationScore):
+    """LLM Judge 기반 환각 탐지 분석 결과."""
+
+    category_scores: Dict[str, float] = field(default_factory=dict)
+    problematic_areas: List[Dict[str, str]] = field(default_factory=list)
+    judge_reasoning: str = ""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.method_name = "LLM-Judge"
+
+    def get_summary(self) -> str:
+        """LLM Judge 분석 결과 요약."""
+        if self.category_scores:
+            categories = ", ".join([
+                f"{cat}: {score:.2f}"
+                for cat, score in self.category_scores.items()
+            ])
+            return (
+                f"LLM Judge - 신뢰도: {self.confidence:.2f} "
+                f"({categories})"
+            )
+        else:
+            return f"LLM Judge - 신뢰도: {self.confidence:.2f}"

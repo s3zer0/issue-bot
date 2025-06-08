@@ -25,8 +25,10 @@ class EnhancedIssueSearcher:
             api_key: Optional[str] = None,
             enable_reppl: bool = True,
             enable_consistency: bool = True,
+            enable_llm_judge: bool = True,  # 새로 추가
             min_confidence_threshold: float = 0.5,
-            consistency_check_threshold: float = 0.6
+            consistency_check_threshold: float = 0.6,
+            llm_judge_threshold: float = 0.7  # 새로 추가
     ):
         """
         환각 탐지 기능이 강화된 이슈 검색기를 초기화합니다.
@@ -35,8 +37,10 @@ class EnhancedIssueSearcher:
             api_key (Optional[str]): API 키
             enable_reppl (bool): RePPL 탐지 활성화 여부
             enable_consistency (bool): 자기 일관성 검사 활성화 여부
+            enable_llm_judge (bool): LLM Judge 활성화 여부
             min_confidence_threshold (float): 최소 신뢰도 임계값
             consistency_check_threshold (float): 일관성 검사를 적용할 최소 신뢰도
+            llm_judge_threshold (float): LLM Judge를 적용할 최소 신뢰도
         """
         # 기본 이슈 검색기
         self.base_searcher = create_issue_searcher(api_key)
@@ -47,15 +51,20 @@ class EnhancedIssueSearcher:
             self.detectors['RePPL'] = RePPLDetector()
         if enable_consistency:
             self.detectors['Self-Consistency'] = SelfConsistencyChecker()
+        if enable_llm_judge:
+            from .llm_judge import LLMJudgeDetector
+            self.detectors['LLM-Judge'] = LLMJudgeDetector()
 
         # 설정
         self.min_confidence_threshold = min_confidence_threshold
         self.consistency_check_threshold = consistency_check_threshold
+        self.llm_judge_threshold = llm_judge_threshold
 
-        # 탐지 방법별 가중치
+        # 탐지 방법별 가중치 (LLM Judge 추가)
         self.detector_weights = {
-            'RePPL': 0.5,
-            'Self-Consistency': 0.5
+            'RePPL': 0.3,
+            'Self-Consistency': 0.3,
+            'LLM-Judge': 0.4  # LLM Judge에 더 높은 가중치
         }
 
         logger.info(
@@ -188,12 +197,26 @@ class EnhancedIssueSearcher:
             if ('Self-Consistency' in self.detectors and
                     (not individual_scores or
                      min(s.confidence for s in individual_scores.values()) >= self.consistency_check_threshold)):
-                # 이슈 내용을 기반으로 일관성 검사
                 consistency_score = await self.detectors['Self-Consistency'].analyze_text(
                     issue.summary,
                     context=issue.title
                 )
                 individual_scores['Self-Consistency'] = consistency_score
+
+            # LLM Judge 검사 (이전 점수들이 임계값 이상일 때만)
+            if ('LLM-Judge' in self.detectors and
+                    (not individual_scores or
+                     min(s.confidence for s in individual_scores.values()) >= self.llm_judge_threshold)):
+                # 상세 내용이 있으면 포함하여 평가
+                text_to_judge = issue.summary
+                if issue.detailed_content:
+                    text_to_judge = f"{issue.summary}\n\n{issue.detailed_content[:1000]}"
+
+                llm_judge_score = await self.detectors['LLM-Judge'].analyze_text(
+                    text_to_judge,
+                    context=f"주제: {topic}, 제목: {issue.title}"
+                )
+                individual_scores['LLM-Judge'] = llm_judge_score
 
             # 2. 점수 통합
             combined_score = CombinedHallucinationScore(
@@ -219,6 +242,13 @@ class EnhancedIssueSearcher:
                     f"이슈 '{issue.title[:30]}...' 제외됨 - "
                     f"신뢰도: {combined_score.final_confidence:.2f} < {self.min_confidence_threshold}"
                 )
+
+                # LLM Judge의 문제 영역 정보 로그
+                if 'LLM-Judge' in individual_scores:
+                    judge_score = individual_scores['LLM-Judge']
+                    if hasattr(judge_score, 'problematic_areas') and judge_score.problematic_areas:
+                        logger.warning(f"LLM Judge가 발견한 문제점: {judge_score.problematic_areas[0]['issue']}")
+
                 return None
 
         except Exception as e:

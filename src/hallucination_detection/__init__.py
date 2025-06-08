@@ -5,6 +5,7 @@
 주요 구성 요소:
 - RePPL (Repetition as Pre-Perplexity) 탐지기
 - 자기 일관성 검사기 (Self-Consistency Checker)
+- LLM-as-a-Judge 탐지기
 - 통합 환각 탐지 검색기
 """
 
@@ -16,6 +17,7 @@ from .models import (
 )
 from .reppl_detector import RePPLDetector
 from .consistency_checker import SelfConsistencyChecker
+from .llm_judge import LLMJudgeDetector, LLMJudgeScore
 from .enhanced_searcher import EnhancedIssueSearcher
 
 __all__ = [
@@ -23,10 +25,12 @@ __all__ = [
     'HallucinationScore',
     'RePPLScore',
     'ConsistencyScore',
+    'LLMJudgeScore',
     'CombinedHallucinationScore',
     # 탐지기
     'RePPLDetector',
     'SelfConsistencyChecker',
+    'LLMJudgeDetector',
     # 통합 검색기
     'EnhancedIssueSearcher'
 ]
