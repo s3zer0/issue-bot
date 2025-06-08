@@ -10,18 +10,19 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 테스트 대상 모듈 임포트
-from src.hallucination_detector import RePPLHallucinationDetector, RePPLEnhancedIssueSearcher
+# 테스트 대상 모듈 임포트 - 새로운 경로 사용
+from src.hallucination_detection.reppl_detector import RePPLDetector
+from src.hallucination_detection.enhanced_searcher import EnhancedIssueSearcher
 from src.models import KeywordResult, IssueItem, SearchResult
 
 
 # --- 픽스처(Fixtures) ---
 @pytest.fixture
 def detector():
-    """테스트용 RePPLHallucinationDetector 인스턴스 픽스처"""
-    with patch('src.hallucination_detector.SentenceTransformer'), \
-            patch('src.hallucination_detector.config'):
-        return RePPLHallucinationDetector()
+    """테스트용 RePPLDetector 인스턴스 픽스처"""
+    with patch('src.hallucination_detection.reppl_detector.SentenceTransformer'), \
+            patch('src.hallucination_detection.reppl_detector.config'):
+        return RePPLDetector()
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def sample_keyword_result():
     )
 
 
-# --- RePPLHallucinationDetector 단위 테스트 ---
+# --- RePPLDetector 단위 테스트 ---
 class TestRePPLHallucinationDetector:
     """RePPLDetector의 각 계산 메서드를 단위 테스트합니다."""
 
@@ -99,13 +100,13 @@ class TestRePPLHallucinationDetector:
         assert confidence_high_ppl >= 0
 
 
-# --- RePPLEnhancedIssueSearcher 통합 테스트 ---
+# --- EnhancedIssueSearcher 통합 테스트 ---
 @pytest.mark.asyncio
 class TestRePPLEnhancedIssueSearcher:
-    """RePPLEnhancedIssueSearcher의 전체 흐름을 테스트합니다."""
+    """EnhancedIssueSearcher의 전체 흐름을 테스트합니다."""
 
-    @patch('src.hallucination_detector.create_issue_searcher')
-    @patch('src.hallucination_detector.RePPLHallucinationDetector')
+    @patch('src.hallucination_detection.enhanced_searcher.create_issue_searcher')
+    @patch('src.hallucination_detection.enhanced_searcher.RePPLDetector')
     async def test_search_with_validation_success(self, mock_detector_class, mock_searcher_class,
                                                   sample_keyword_result):
         """모든 이슈가 검증을 통과하는 시나리오를 테스트합니다."""
@@ -120,24 +121,32 @@ class TestRePPLEnhancedIssueSearcher:
         mock_base_searcher.search_issues_from_keywords.return_value = mock_base_search_result
         mock_searcher_class.return_value = mock_base_searcher
 
-        mock_reppl_score = MagicMock(confidence=0.9)
+        # Mock RePPL 분석 결과
+        from src.hallucination_detection.models import RePPLScore
+        mock_reppl_score = RePPLScore(
+            confidence=0.9,
+            repetition_score=0.1,
+            perplexity=20.0,
+            semantic_entropy=0.7
+        )
+
         mock_detector_instance = AsyncMock()
-        mock_detector_instance.analyze_response.return_value = mock_reppl_score
+        mock_detector_instance.analyze_issue.return_value = mock_reppl_score
         mock_detector_class.return_value = mock_detector_instance
 
         # 테스트 실행
-        enhanced_searcher = RePPLEnhancedIssueSearcher()
+        enhanced_searcher = EnhancedIssueSearcher(enable_consistency=False)  # 일관성 검사 비활성화
         final_result = await enhanced_searcher.search_with_validation(sample_keyword_result, "1일")
 
         # 검증
         assert final_result.total_found == 1
         assert final_result.issues[0].title == "테스트 이슈"
-        assert hasattr(final_result.issues[0], 'reppl_confidence')
-        assert final_result.issues[0].reppl_confidence == 0.9
+        assert hasattr(final_result.issues[0], 'hallucination_confidence')
+        assert final_result.issues[0].hallucination_confidence == 0.9
 
-    @patch('src.hallucination_detector.create_issue_searcher')
-    @patch('src.hallucination_detector.RePPLHallucinationDetector')
-    @patch('src.hallucination_detector.generate_keywords_for_topic')
+    @patch('src.hallucination_detection.enhanced_searcher.create_issue_searcher')
+    @patch('src.hallucination_detection.enhanced_searcher.RePPLDetector')
+    @patch('src.hallucination_detection.enhanced_searcher.generate_keywords_for_topic')
     async def test_search_with_validation_retry(self, mock_regen_keywords, mock_detector_class, mock_searcher_class,
                                                 sample_keyword_result):
         """검증 실패로 인해 키워드 재생성 및 재시도가 일어나는지 테스트합니다."""
@@ -158,16 +167,23 @@ class TestRePPLEnhancedIssueSearcher:
         mock_searcher_class.return_value = mock_base_searcher
 
         # RePPL 분석은 항상 낮은 점수를 반환하도록 설정
-        mock_reppl_score = MagicMock(confidence=0.1)  # 임계값(0.5) 이하
+        from src.hallucination_detection.models import RePPLScore
+        mock_reppl_score = RePPLScore(
+            confidence=0.1,  # 임계값(0.5) 이하
+            repetition_score=0.8,
+            perplexity=100.0,
+            semantic_entropy=0.2
+        )
+
         mock_detector_instance = AsyncMock()
-        mock_detector_instance.analyze_response.return_value = mock_reppl_score
+        mock_detector_instance.analyze_issue.return_value = mock_reppl_score
         mock_detector_class.return_value = mock_detector_instance
 
         # 키워드 재생성 Mock
         mock_regen_keywords.return_value = sample_keyword_result
 
         # 테스트 실행
-        enhanced_searcher = RePPLEnhancedIssueSearcher()
+        enhanced_searcher = EnhancedIssueSearcher(enable_consistency=False)
         final_result = await enhanced_searcher.search_with_validation(sample_keyword_result, "1일")
 
         # 검증
