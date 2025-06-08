@@ -136,3 +136,126 @@ class TestConvenienceFunctions:
         assert "## 📖 상세 내용" in report
         assert "## 🔗 배경 정보" in report
         assert "전기차 시장 발전 배경" in report
+
+class TestIssueSearcherImproved:
+    """개선된 IssueSearcher 테스트"""
+
+    @pytest.mark.unit
+    def test_extract_field_multiple_names(self):
+        """다양한 필드명으로 값을 추출하는 테스트"""
+        searcher = IssueSearcher(api_key="test_key")
+        text = """
+        **출처**: TechCrunch
+        **Date**: 2024-01-15
+        **카테고리**: 뉴스
+        """
+
+        # 한글/영문 모두 추출 가능해야 함
+        assert searcher._extract_field(text, ['출처', 'Source']) == "TechCrunch"
+        assert searcher._extract_field(text, ['발행일', 'Date']) == "2024-01-15"
+        assert searcher._extract_field(text, ['카테고리', 'Category']) == "뉴스"
+
+    @pytest.mark.unit
+    def test_clean_source(self):
+        """출처 정리 로직 테스트"""
+        searcher = IssueSearcher(api_key="test_key")
+
+        # URL에서 도메인 추출
+        assert searcher._clean_source("https://techcrunch.com/2024/01/15/article") == "techcrunch.com"
+        assert searcher._clean_source("https://www.reuters.com/article") == "reuters.com"
+
+        # Unknown 처리
+        assert searcher._clean_source("Unknown") == "Unknown"
+        assert searcher._clean_source("N/A") == "Unknown"
+        assert searcher._clean_source(None) == "Unknown"
+
+        # 일반 텍스트는 그대로
+        assert searcher._clean_source("TechCrunch") == "TechCrunch"
+
+    @pytest.mark.unit
+    def test_parse_date(self):
+        """날짜 파싱 로직 테스트"""
+        searcher = IssueSearcher(api_key="test_key")
+
+        # 다양한 형식 파싱
+        assert searcher._parse_date("2024-01-15") == "2024-01-15"
+        assert searcher._parse_date("2024/01/15") == "2024-01-15"
+        assert searcher._parse_date("2024.01.15") == "2024-01-15"
+        assert searcher._parse_date("2024년 1월 15일") == "2024-01-15"
+
+        # 유효하지 않은 날짜
+        assert searcher._parse_date("N/A") is None
+        assert searcher._parse_date("unknown") is None
+        assert searcher._parse_date(None) is None
+
+    @pytest.mark.unit
+    @patch('src.issue_searcher.PerplexityClient')
+    def test_parse_issue_section_improved(self, mock_client):
+        """개선된 API 응답 파싱 테스트"""
+        searcher = IssueSearcher(api_key="test_key")
+
+        # 더 현실적인 API 응답
+        section = """## **iOS 19 대규모 UI 개편 예정**
+**요약**: 애플이 WWDC 2025에서 iOS 19를 공개할 예정이며, 2013년 iOS 7 이후 최대 규모의 UI 개편이 예상됩니다.
+**출처**: https://techcrunch.com/2024/12/20/ios-19-ui-redesign
+**발행일**: 2024-12-20
+**카테고리**: 뉴스
+**기술적 핵심**: visionOS 스타일의 둥근 버튼과 반투명 UI 디자인 적용
+**중요도**: Critical
+**관련 키워드**: iOS, Swift, UI/UX"""
+
+        issue = searcher._parse_issue_section(section)
+
+        assert issue is not None
+        assert issue.title == "iOS 19 대규모 UI 개편 예정"
+        assert issue.source == "techcrunch.com"
+        assert issue.published_date == "2024-12-20"
+        assert issue.category == "뉴스"
+        assert hasattr(issue, 'technical_core')
+        assert hasattr(issue, 'importance')
+        assert getattr(issue, 'importance') == "Critical"
+
+    @pytest.mark.unit
+    def test_calculate_relevance_scores_improved(self):
+        """개선된 관련도 점수 계산 테스트"""
+        searcher = IssueSearcher(api_key="test_key")
+
+        keyword_result = KeywordResult(
+            topic="iOS Development",
+            primary_keywords=["iOS", "Swift", "SwiftUI"],
+            related_terms=["iPhone", "Xcode"],
+            context_keywords=["Mobile", "Apple"],
+            confidence_score=0.9,
+            generation_time=1.0,
+            raw_response=""
+        )
+
+        # 높은 관련도 이슈
+        high_relevance_issue = IssueItem(
+            title="iOS 19 SwiftUI 새로운 기능",
+            summary="Swift와 SwiftUI의 혁신적인 업데이트가 iOS 19에 포함됩니다.",
+            source="apple.com",
+            published_date="2024-12-20",
+            relevance_score=0.5,
+            category="news",
+            content_snippet="..."
+        )
+        setattr(high_relevance_issue, 'importance', 'Critical')
+
+        # 낮은 관련도 이슈
+        low_relevance_issue = IssueItem(
+            title="Android 개발 동향",
+            summary="구글이 새로운 Android 버전을 발표했습니다.",
+            source="Unknown",
+            published_date=None,
+            relevance_score=0.5,
+            category="news",
+            content_snippet="..."
+        )
+
+        issues = [high_relevance_issue, low_relevance_issue]
+        scored_issues = searcher._calculate_relevance_scores(issues, keyword_result)
+
+        # 첫 번째 이슈가 훨씬 높은 점수를 받아야 함
+        assert scored_issues[0].relevance_score > 0.7
+        assert scored_issues[1].relevance_score < 0.3

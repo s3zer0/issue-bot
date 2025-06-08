@@ -71,7 +71,7 @@ class PerplexityClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a precise and objective information analysis expert."},
+                {"role": "system", "content": "You are a precise and objective information analysis expert. Always provide specific source URLs and publication dates when available."},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": 10000,  # 최대 응답 토큰 수
@@ -118,16 +118,23 @@ class PerplexityClient:
         # 검색 요청을 위한 프롬프트 구성
         prompt = f"""'{", ".join(keywords)}' 키워드와 관련하여 '{time_period}' 동안 발행된 **개별 뉴스 기사, 블로그 포스트, 기술 문서**를 최대 {max_results}개 찾아줘.
 
-        **요구사항:**
+        **필수 요구사항:**
         - 반드시 각 '개별 문서'의 내용을 기반으로 응답해야 해.
+        - 실제 기사/문서의 웹 URL이나 도메인명을 반드시 포함해야 해.
+        - 발행일은 YYYY-MM-DD 형식으로 명시해야 해.
         - 절대로 웹사이트의 메인 페이지나 기사 목록 페이지만 보고 요약해서는 안 돼.
         - 아래 형식을 반드시 준수해서, 각 기사 정보를 개별 항목으로 만들어줘.
 
         ## **[기사 제목]**
-        **요약**: [기사 내용 요약]
-        **출처**: [출처 웹사이트 이름 또는 URL]
-        **발행일**: [발행 일자]
-        **카테고리**: [뉴스, 블로그, 기술문서 등]"""
+        **요약**: [기사 내용 요약 (구체적이고 상세하게)]
+        **출처**: [실제 웹사이트명 또는 전체 URL (예: TechCrunch, https://techcrunch.com/2024/...)]
+        **발행일**: [YYYY-MM-DD 형식]
+        **카테고리**: [뉴스/블로그/기술문서/논문/보고서 중 하나]
+        **기술적 핵심**: [기술적으로 중요한 핵심 포인트]
+        **중요도**: [Critical/High/Medium/Low]
+        **관련 키워드**: [검색 키워드 중 어떤 것과 관련있는지]
+        
+        주의: 출처가 명확하지 않거나 날짜를 모르는 경우, 그 항목은 포함하지 마세요."""
 
         # 공통 API 호출 메서드 실행
         return await self._make_api_call(prompt)
@@ -143,7 +150,13 @@ class PerplexityClient:
         """
         # 상세 정보 요청을 위한 프롬프트 구성
         prompt = f"""다음 이슈에 대해 **한국어로 상세하게 분석**해줘: **{issue_title}**.
-        상세 내용과 함께, 해당 이슈가 발생하게 된 **배경 정보(Background Context)**도 찾아서 포함해줘."""
+        
+        다음 정보를 반드시 포함해줘:
+        1. 상세한 내용과 기술적 설명
+        2. 해당 이슈가 발생하게 된 **배경 정보(Background Context)**
+        3. 정보의 출처(웹사이트명, URL 등)가 있다면 명시
+        4. 관련 날짜나 시기 정보가 있다면 포함
+        5. 신뢰할 수 있는 구체적인 사실과 수치 위주로 작성"""
 
         # 요청 로깅 (제목의 일부만 기록)
         logger.info(f"상세 정보 요청: {issue_title[:50]}...")

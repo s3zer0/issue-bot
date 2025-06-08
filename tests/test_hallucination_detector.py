@@ -1,6 +1,9 @@
+"""
+LLM Judge 환각 탐지기 테스트.
+"""
+
 import pytest
-import numpy as np
-import math
+import json
 from unittest.mock import patch, AsyncMock, MagicMock
 import sys
 import os
@@ -10,183 +13,248 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 테스트 대상 모듈 임포트 - 새로운 경로 사용
-from src.hallucination_detection.reppl_detector import RePPLDetector
-from src.hallucination_detection.enhanced_searcher import EnhancedIssueSearcher
-from src.models import KeywordResult, IssueItem, SearchResult
+from src.hallucination_detection.llm_judge import LLMJudgeDetector, LLMJudgeScore
+from src.models import IssueItem
 
 
-# --- 픽스처(Fixtures) ---
-@pytest.fixture
-def detector():
-    """테스트용 RePPLDetector 인스턴스 픽스처"""
-    with patch('src.hallucination_detection.reppl_detector.SentenceTransformer'), \
-            patch('src.hallucination_detection.reppl_detector.config'):
-        return RePPLDetector()
+class TestLLMJudgeDetector:
+    """LLM Judge 탐지기의 단위 테스트."""
 
+    @pytest.fixture
+    def detector(self):
+        """테스트용 LLMJudgeDetector 인스턴스."""
+        with patch('src.hallucination_detection.llm_judge.config') as mock_config:
+            mock_config.get_openai_api_key.return_value = "test_key"
+            yield LLMJudgeDetector(model_name="gpt-4o")
 
-@pytest.fixture
-def sample_keyword_result():
-    """테스트용 KeywordResult 픽스처"""
-    return KeywordResult(
-        topic="AI",
-        primary_keywords=["인공지능"],
-        related_terms=["머신러닝"],
-        context_keywords=[],
-        confidence_score=0.9,
-        generation_time=1.0,
-        raw_response=""
-    )
+    def test_create_evaluation_prompt(self, detector):
+        """평가 프롬프트 생성 테스트."""
+        text = "OpenAI는 2024년 12월에 GPT-5를 출시했습니다."
+        context = "최신 AI 기술 동향"
 
+        prompt = detector._create_evaluation_prompt(text, context)
 
-# --- RePPLDetector 단위 테스트 ---
-class TestRePPLHallucinationDetector:
-    """RePPLDetector의 각 계산 메서드를 단위 테스트합니다."""
+        assert "원래 질문/주제: 최신 AI 기술 동향" in prompt
+        assert text in prompt
+        assert "사실적 정확성" in prompt
+        assert "논리적 일관성" in prompt
+        assert "맥락적 관련성" in prompt
+        assert "출처 신뢰성" in prompt
+        assert "JSON" in prompt
 
-    def test_analyze_repetition(self, detector):
-        """반복성 점수 계산 로직을 테스트합니다."""
-        text_normal = "이것은 정상적인 문장입니다. 반복이 없습니다."
-        text_repeated = "중요한 내용은 반복됩니다. 중요한 내용은 반복됩니다."
+    def test_parse_evaluation_result(self, detector):
+        """평가 결과 파싱 테스트."""
+        mock_result = {
+            "factual_accuracy": {"score": 80, "reasoning": "대부분 정확"},
+            "logical_consistency": {"score": 90, "reasoning": "논리적"},
+            "contextual_relevance": {"score": 85, "reasoning": "관련성 높음"},
+            "source_reliability": {"score": 60, "reasoning": "출처 불명확"}
+        }
 
-        score_normal, phrases_normal = detector._analyze_repetition(text_normal)
-        score_repeated, phrases_repeated = detector._analyze_repetition(text_repeated)
+        scores = detector._parse_evaluation_result(mock_result)
 
-        assert score_normal == 0.0
-        assert len(phrases_normal) == 0
+        assert scores["factual_accuracy"] == 0.8
+        assert scores["logical_consistency"] == 0.9
+        assert scores["contextual_relevance"] == 0.85
+        assert scores["source_reliability"] == 0.6
 
-        assert score_repeated >= 0.5
-        assert "중요한 내용은 반복됩니다" in phrases_repeated
+    def test_calculate_weighted_score(self, detector):
+        """가중 점수 계산 테스트."""
+        scores = {
+            "factual_accuracy": 0.8,
+            "logical_consistency": 0.9,
+            "contextual_relevance": 0.85,
+            "source_reliability": 0.6
+        }
+
+        final_score = detector._calculate_weighted_score(scores)
+
+        # 가중치에 따른 계산 검증
+        expected = (0.8 * 0.35 + 0.9 * 0.25 + 0.85 * 0.20 + 0.6 * 0.20)
+        assert final_score == pytest.approx(expected, rel=0.01)
+
+    def test_identify_problematic_areas(self, detector):
+        """문제 영역 식별 테스트."""
+        mock_result = {
+            "problematic_areas": [
+                {"text": "2024년 12월 GPT-5 출시", "issue": "미래 날짜에 대한 확정적 주장"},
+                {"text": "100% 정확도", "issue": "과도한 주장"},
+                {"text": "모든 분야에서 최고", "issue": "검증 불가능한 일반화"}
+            ]
+        }
+
+        areas = detector._identify_problematic_areas(mock_result)
+
+        assert len(areas) == 3
+        assert areas[0]["text"] == "2024년 12월 GPT-5 출시"
+        assert "미래 날짜" in areas[0]["issue"]
 
     @pytest.mark.asyncio
-    async def test_calculate_perplexity_with_gpt(self, detector):
-        """GPT API를 이용한 퍼플렉시티 계산 로직을 Mocking하여 테스트합니다."""
-        mock_logprobs = [MagicMock(logprob=-0.5), MagicMock(logprob=-1.5)]
-        expected_perplexity = math.exp(1.0)
+    async def test_analyze_text_success(self, detector):
+        """텍스트 분석 성공 케이스 테스트."""
+        mock_llm_response = {
+            "factual_accuracy": {"score": 85, "reasoning": "대체로 정확한 정보"},
+            "logical_consistency": {"score": 90, "reasoning": "논리적으로 일관됨"},
+            "contextual_relevance": {"score": 95, "reasoning": "주제에 매우 적합"},
+            "source_reliability": {"score": 70, "reasoning": "일부 출처 누락"},
+            "problematic_areas": [
+                {"text": "특정 날짜", "issue": "확인 필요"}
+            ],
+            "overall_reasoning": "전반적으로 신뢰할 만한 텍스트"
+        }
 
-        mock_openai_response = MagicMock()
-        mock_openai_response.choices[0].logprobs.content = mock_logprobs
+        with patch.object(detector, '_get_llm_evaluation', AsyncMock(return_value=mock_llm_response)):
+            result = await detector.analyze_text(
+                "AI 기술이 빠르게 발전하고 있습니다.",
+                context="AI 기술 동향"
+            )
 
-        with patch.object(detector.client.chat.completions, 'create',
-                          AsyncMock(return_value=mock_openai_response)) as mock_create:
-            perplexity = await detector._calculate_perplexity_with_gpt("테스트 텍스트")
+            assert isinstance(result, LLMJudgeScore)
+            assert result.confidence > 0.7
+            assert len(result.problematic_areas) == 1
+            assert "전반적으로 신뢰할 만한" in result.judge_reasoning
 
-            mock_create.assert_awaited_once()
-            assert perplexity == pytest.approx(expected_perplexity)
+    @pytest.mark.asyncio
+    async def test_analyze_text_low_confidence(self, detector):
+        """낮은 신뢰도 텍스트 분석 테스트."""
+        mock_llm_response = {
+            "factual_accuracy": {"score": 30, "reasoning": "많은 사실 오류"},
+            "logical_consistency": {"score": 40, "reasoning": "모순된 주장"},
+            "contextual_relevance": {"score": 50, "reasoning": "주제에서 벗어남"},
+            "source_reliability": {"score": 20, "reasoning": "출처 없음"},
+            "problematic_areas": [
+                {"text": "확인되지 않은 주장", "issue": "근거 부족"},
+                {"text": "과장된 표현", "issue": "검증 불가"}
+            ],
+            "overall_reasoning": "신뢰도가 낮은 텍스트"
+        }
 
-    def test_calculate_semantic_entropy(self, detector):
-        """의미적 엔트로피 계산 로직을 테스트합니다."""
-        mock_embeddings_similar = np.array([[0.1, 0.2, 0.3], [0.1, 0.2, 0.301]])
-        mock_embeddings_diverse = np.array([[0.1, 0.2, 0.3], [0.8, 0.1, 0.2], [-0.5, 0.4, 0.1]])
+        with patch.object(detector, '_get_llm_evaluation', AsyncMock(return_value=mock_llm_response)):
+            result = await detector.analyze_text("의심스러운 주장들...")
 
-        # 1. 유사한 문장들로 구성된 텍스트 -> 낮은 엔트로피
-        detector.sentence_model.encode = MagicMock(return_value=mock_embeddings_similar)
-        entropy_low = detector._calculate_semantic_entropy("이것은 문장입니다. 이것도 문장입니다.")
+            assert result.confidence < 0.5
+            assert len(result.problematic_areas) == 2
+            assert result.category_scores["factual_accuracy"] == 0.3
 
-        # 2. 다양한 문장들로 구성된 텍스트 -> 높은 엔트로피
-        detector.sentence_model.encode = MagicMock(return_value=mock_embeddings_diverse)
-        entropy_high = detector._calculate_semantic_entropy("이것은 문장입니다. 저것은 다른 문장입니다. 완전히 새로운 내용입니다.")
+    @pytest.mark.asyncio
+    async def test_analyze_text_error_handling(self, detector):
+        """오류 처리 테스트."""
+        with patch.object(detector, '_get_llm_evaluation', AsyncMock(side_effect=Exception("API 오류"))):
+            result = await detector.analyze_text("테스트 텍스트")
 
-        assert entropy_high > entropy_low
+            assert result.confidence == 0.5  # 중립 점수
+            assert "평가 중 오류 발생" in result.judge_reasoning
+            assert "API 오류" in result.analysis_details.get("error", "")
 
-    def test_calculate_confidence_score(self, detector):
-        """최종 신뢰도 점수 계산 로직을 테스트합니다."""
-        confidence_good = detector._calculate_confidence_score(0.05, 10, 0.8)
-        assert confidence_good > 0.7
-
-        confidence_bad = detector._calculate_confidence_score(0.8, 200, 0.1)
-        assert confidence_bad < 0.3
-
-        confidence_high_ppl = detector._calculate_confidence_score(0.1, 500, 0.5)
-        assert confidence_high_ppl >= 0
-
-
-# --- EnhancedIssueSearcher 통합 테스트 ---
-@pytest.mark.asyncio
-class TestRePPLEnhancedIssueSearcher:
-    """EnhancedIssueSearcher의 전체 흐름을 테스트합니다."""
-
-    @patch('src.hallucination_detection.enhanced_searcher.create_issue_searcher')
-    @patch('src.hallucination_detection.enhanced_searcher.RePPLDetector')
-    async def test_search_with_validation_success(self, mock_detector_class, mock_searcher_class,
-                                                  sample_keyword_result):
-        """모든 이슈가 검증을 통과하는 시나리오를 테스트합니다."""
-        # Mock 설정
-        mock_issue = IssueItem("테스트 이슈", "요약", "출처", None, 0.8, "news", "...", detailed_content="상세 내용")
-        mock_base_search_result = SearchResult(
-            query_keywords=["AI"], total_found=1, issues=[mock_issue],
-            search_time=1.0, api_calls_used=1, confidence_score=0.8, time_period="1일", raw_responses=[]
-        )
-
-        mock_base_searcher = AsyncMock()
-        mock_base_searcher.search_issues_from_keywords.return_value = mock_base_search_result
-        mock_searcher_class.return_value = mock_base_searcher
-
-        # Mock RePPL 분석 결과
-        from src.hallucination_detection.models import RePPLScore
-        mock_reppl_score = RePPLScore(
-            confidence=0.9,
-            repetition_score=0.1,
-            perplexity=20.0,
-            semantic_entropy=0.7
-        )
-
-        mock_detector_instance = AsyncMock()
-        mock_detector_instance.analyze_issue.return_value = mock_reppl_score
-        mock_detector_class.return_value = mock_detector_instance
-
-        # 테스트 실행
-        enhanced_searcher = EnhancedIssueSearcher(enable_consistency=False)  # 일관성 검사 비활성화
-        final_result = await enhanced_searcher.search_with_validation(sample_keyword_result, "1일")
-
-        # 검증
-        assert final_result.total_found == 1
-        assert final_result.issues[0].title == "테스트 이슈"
-        assert hasattr(final_result.issues[0], 'hallucination_confidence')
-        assert final_result.issues[0].hallucination_confidence == 0.9
-
-    @patch('src.hallucination_detection.enhanced_searcher.create_issue_searcher')
-    @patch('src.hallucination_detection.enhanced_searcher.RePPLDetector')
-    @patch('src.hallucination_detection.enhanced_searcher.generate_keywords_for_topic')
-    async def test_search_with_validation_retry(self, mock_regen_keywords, mock_detector_class, mock_searcher_class,
-                                                sample_keyword_result):
-        """검증 실패로 인해 키워드 재생성 및 재시도가 일어나는지 테스트합니다."""
-        # Mock 설정
-        mock_issue = IssueItem("신뢰도 낮은 이슈", "요약", "출처", None, 0.8, "news", "...")
-        mock_base_search_result = SearchResult(
-            query_keywords=["AI"], total_found=1, issues=[mock_issue],
-            search_time=1.0, api_calls_used=1, confidence_score=0.8, time_period="1일", raw_responses=[]
-        )
-
-        # 첫 번째 검색은 성공하지만, 두 번째 검색 결과는 없다고 가정
-        mock_base_searcher = AsyncMock()
-        mock_base_searcher.search_issues_from_keywords.side_effect = [
-            mock_base_search_result,
-            SearchResult(query_keywords=[], total_found=0, issues=[], search_time=1, api_calls_used=1,
-                         confidence_score=0, time_period="1일", raw_responses=[])
+    @pytest.mark.asyncio
+    async def test_analyze_claims(self, detector):
+        """여러 주장 분석 테스트."""
+        claims = [
+            "AI는 2024년에 큰 발전을 이루었습니다.",
+            "GPT-5는 1조 개의 파라미터를 가집니다.",
+            "모든 기업이 AI를 도입했습니다."
         ]
-        mock_searcher_class.return_value = mock_base_searcher
 
-        # RePPL 분석은 항상 낮은 점수를 반환하도록 설정
-        from src.hallucination_detection.models import RePPLScore
-        mock_reppl_score = RePPLScore(
-            confidence=0.1,  # 임계값(0.5) 이하
-            repetition_score=0.8,
-            perplexity=100.0,
-            semantic_entropy=0.2
-        )
+        mock_scores = [0.8, 0.5, 0.3]
 
-        mock_detector_instance = AsyncMock()
-        mock_detector_instance.analyze_issue.return_value = mock_reppl_score
-        mock_detector_class.return_value = mock_detector_instance
+        with patch.object(detector, 'analyze_text', AsyncMock()) as mock_analyze:
+            # 각 호출에 대해 다른 점수 반환
+            mock_analyze.side_effect = [
+                MagicMock(confidence=score) for score in mock_scores
+            ]
 
-        # 키워드 재생성 Mock
-        mock_regen_keywords.return_value = sample_keyword_result
+            claim_scores = await detector.analyze_claims(claims, "AI 현황")
 
-        # 테스트 실행
-        enhanced_searcher = EnhancedIssueSearcher(enable_consistency=False)
-        final_result = await enhanced_searcher.search_with_validation(sample_keyword_result, "1일")
+            assert len(claim_scores) == 3
+            assert claim_scores[claims[0]] == 0.8
+            assert claim_scores[claims[1]] == 0.5
+            assert claim_scores[claims[2]] == 0.3
 
-        # 검증
-        assert mock_base_searcher.search_issues_from_keywords.call_count == 2  # 검색이 2번 일어났는지
-        mock_regen_keywords.assert_awaited_once()  # 키워드 재생성이 1번 일어났는지
-        assert final_result.total_found == 0  # 최종적으로 통과한 이슈는 없는지
+
+@pytest.mark.asyncio
+class TestLLMJudgeIntegration:
+    """LLM Judge의 통합 테스트."""
+
+    async def test_llm_judge_with_issue_item(self):
+        """IssueItem과의 통합 테스트."""
+        with patch('src.hallucination_detection.llm_judge.config') as mock_config:
+            mock_config.get_openai_api_key.return_value = "test_key"
+
+            detector = LLMJudgeDetector()
+
+            issue = IssueItem(
+                title="AI 기술의 미래",
+                summary="AI가 모든 산업을 완전히 대체할 것입니다.",
+                source="Tech Blog",
+                published_date="2024-01-15",
+                relevance_score=0.9,
+                category="tech",
+                content_snippet="...",
+                detailed_content="AI는 10년 내에 인간의 모든 일자리를 대체하고..."
+            )
+
+            mock_response = {
+                "factual_accuracy": {"score": 40, "reasoning": "과장된 주장"},
+                "logical_consistency": {"score": 60, "reasoning": "일부 논리적"},
+                "contextual_relevance": {"score": 80, "reasoning": "주제 관련"},
+                "source_reliability": {"score": 50, "reasoning": "블로그 출처"},
+                "problematic_areas": [
+                    {"text": "모든 산업을 완전히 대체", "issue": "극단적 일반화"}
+                ],
+                "overall_reasoning": "과장된 미래 예측"
+            }
+
+            with patch.object(detector, '_get_llm_evaluation', AsyncMock(return_value=mock_response)):
+                result = await detector.analyze_issue(issue, "AI 기술 동향")
+
+                assert result.confidence < 0.6  # 낮은 신뢰도
+                assert "issue_title" in result.analysis_details
+                assert result.analysis_details["issue_title"] == "AI 기술의 미래"
+
+
+@pytest.mark.asyncio
+class TestLLMJudgeEdgeCases:
+    """LLM Judge의 엣지 케이스 테스트."""
+
+    async def test_empty_text_analysis(self):
+        """빈 텍스트 분석 테스트."""
+        with patch('src.hallucination_detection.llm_judge.config') as mock_config:
+            mock_config.get_openai_api_key.return_value = "test_key"
+
+            detector = LLMJudgeDetector()
+
+            with patch.object(detector, '_get_llm_evaluation', AsyncMock()) as mock_eval:
+                mock_eval.return_value = {
+                    "factual_accuracy": {"score": 50},
+                    "logical_consistency": {"score": 50},
+                    "contextual_relevance": {"score": 0},
+                    "source_reliability": {"score": 0},
+                    "problematic_areas": [],
+                    "overall_reasoning": "빈 텍스트"
+                }
+
+                result = await detector.analyze_text("")
+
+                # 이 줄이 수정되었습니다.
+                assert result.confidence == pytest.approx(0.3)
+
+    async def test_malformed_llm_response(self):
+        """잘못된 형식의 LLM 응답 처리 테스트."""
+        with patch('src.hallucination_detection.llm_judge.config') as mock_config:
+            mock_config.get_openai_api_key.return_value = "test_key"
+
+            detector = LLMJudgeDetector()
+
+            # 일부 필드가 누락된 응답
+            incomplete_response = {
+                "factual_accuracy": {"score": 80},
+                "logical_consistency": {"score": 90}
+                # contextual_relevance와 source_reliability 누락
+            }
+
+            with patch.object(detector, '_get_llm_evaluation', AsyncMock(return_value=incomplete_response)):
+                result = await detector.analyze_text("테스트")
+
+                # 누락된 카테고리는 0.5로 처리되어야 함
+                assert "contextual_relevance" in result.category_scores
+                assert result.category_scores["contextual_relevance"] == 0.5

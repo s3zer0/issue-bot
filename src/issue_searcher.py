@@ -11,6 +11,7 @@ import json
 import re
 import time
 from typing import List, Dict, Optional, Any
+from datetime import datetime, timedelta
 from loguru import logger
 
 from src.clients.perplexity_client import PerplexityClient
@@ -140,7 +141,7 @@ class IssueSearcher:
         """
         try:
             # 제목과 요약 추출
-            title_match = re.search(r'##\s*\*\*(.*)\*\*', section)
+            title_match = re.search(r'##\s*\*\*(.*?)\*\*', section)
             summary_match = re.search(r'\*\*요약\*\*:\s*(.*?)(?=\*\*|$)', section, re.DOTALL)
 
             title = title_match.group(1).strip() if title_match else None
@@ -150,39 +151,94 @@ class IssueSearcher:
                 logger.warning(f"제목 또는 요약 누락: {section[:50]}...")
                 return None
 
-            # 기본 필드 추출
-            source_match = re.search(r'\*\*출처\*\*:\s*(.*?)(?=\*\*|$)', section)
-            date_match = re.search(r'\*\*발행일\*\*:\s*(.*?)(?=\*\*|$)', section)
-            category_match = re.search(r'\*\*카테고리\*\*:\s*(.*?)(?=\*\*|$)', section)
+            # 기본 필드 추출 (더 유연한 패턴 사용)
+            source = self._extract_field(section, ['출처', 'Source'])
+            date_str = self._extract_field(section, ['발행일', 'Date', 'Published'])
+            category = self._extract_field(section, ['카테고리', 'Category']) or 'news'
 
-            # 추가 필드 추출 (기술적 핵심, 중요도, 관련 키워드)
-            tech_core_match = re.search(r'\*\*기술적 핵심\*\*:\s*(.*?)(?=\*\*|$)', section, re.DOTALL)
-            importance_match = re.search(r'\*\*중요도\*\*:\s*(.*?)(?=\*\*|$)', section, re.DOTALL)
-            related_kw_match = re.search(r'\*\*관련 키워드\*\*:\s*(.*?)(?=\*\*|$)', section, re.DOTALL)
+            # 추가 필드 추출
+            tech_core = self._extract_field(section, ['기술적 핵심', 'Technical Core'])
+            importance = self._extract_field(section, ['중요도', 'Importance'])
+            related_kw = self._extract_field(section, ['관련 키워드', 'Related Keywords'])
+
+            # 출처 정리 (URL이 없으면 웹사이트명만이라도 유지)
+            source = self._clean_source(source)
+
+            # 날짜 파싱 및 정리
+            published_date = self._parse_date(date_str)
 
             # IssueItem 객체 생성
             issue = IssueItem(
                 title=title,
                 summary=summary,
-                source=source_match.group(1).strip() if source_match else 'Unknown',
-                published_date=date_match.group(1).strip() if date_match else None,
+                source=source,
+                published_date=published_date,
                 relevance_score=0.5,  # 초기 점수, 이후 계산에서 갱신
-                category=category_match.group(1).strip() if category_match else 'news',
+                category=category,
                 content_snippet=summary[:200]
             )
 
             # 동적으로 추가 필드 설정
-            if tech_core_match:
-                setattr(issue, 'technical_core', tech_core_match.group(1).strip())
-            if importance_match:
-                setattr(issue, 'importance', importance_match.group(1).strip())
-            if related_kw_match:
-                setattr(issue, 'related_keywords', related_kw_match.group(1).strip())
+            if tech_core:
+                setattr(issue, 'technical_core', tech_core)
+            if importance:
+                setattr(issue, 'importance', importance)
+            if related_kw:
+                setattr(issue, 'related_keywords', related_kw)
 
             return issue
         except Exception as e:
             logger.error(f"이슈 섹션 파싱 오류: {e}")
             return None
+
+    def _extract_field(self, text: str, field_names: List[str]) -> Optional[str]:
+        """다양한 필드명으로 값을 추출합니다."""
+        for field_name in field_names:
+            pattern = rf'\*\*{field_name}\*\*:\s*(.*?)(?=\*\*|$)'
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    def _clean_source(self, source: Optional[str]) -> str:
+        """출처 정보를 정리합니다."""
+        if not source or source.lower() in ['unknown', 'n/a', '알 수 없음']:
+            return 'Unknown'
+
+        # URL이 포함된 경우 도메인명 추출
+        url_match = re.search(r'https?://([^/]+)', source)
+        if url_match:
+            domain = url_match.group(1)
+            # www. 제거
+            domain = re.sub(r'^www\.', '', domain)
+            return domain
+
+        return source
+
+    def _parse_date(self, date_str: Optional[str]) -> Optional[str]:
+        """날짜 문자열을 파싱하여 표준 형식으로 변환합니다."""
+        if not date_str or date_str.lower() in ['n/a', '알 수 없음', 'unknown']:
+            return None
+
+        # 다양한 날짜 형식 시도
+        date_formats = [
+            '%Y-%m-%d',
+            '%Y/%m/%d',
+            '%Y.%m.%d',
+            '%Y년 %m월 %d일',
+            '%B %d, %Y',  # January 15, 2024
+            '%d %B %Y',  # 15 January 2024
+        ]
+
+        for fmt in date_formats:
+            try:
+                parsed_date = datetime.strptime(date_str.strip(), fmt)
+                return parsed_date.strftime('%Y-%m-%d')
+            except ValueError:
+                continue
+
+        # 날짜 파싱 실패 시 원본 반환
+        return date_str
 
     def _calculate_relevance_scores(self, issues: List[IssueItem], keyword_result: KeywordResult) -> List[IssueItem]:
         """키워드 매칭을 통해 각 이슈의 관련성 점수를 계산합니다.
@@ -204,22 +260,47 @@ class IssueSearcher:
             if hasattr(issue, 'related_keywords') and issue.related_keywords:
                 text_to_check += f" {issue.related_keywords}".lower()
 
-            # 키워드 매칭 점수 계산
-            score = sum(0.4 for kw in keyword_result.primary_keywords if kw.lower() in text_to_check)
-            score += sum(0.1 for kw in keyword_result.related_terms if kw.lower() in text_to_check)
+            # 키워드 매칭 점수 계산 (개선된 가중치)
+            primary_matches = sum(1 for kw in keyword_result.primary_keywords if kw.lower() in text_to_check)
+            related_matches = sum(1 for kw in keyword_result.related_terms if kw.lower() in text_to_check)
+            context_matches = sum(1 for kw in keyword_result.context_keywords if kw.lower() in text_to_check)
 
-            # 키워드 매칭 시 보너스 점수
-            if score > 0:
-                score += 0.1
+            # 기본 점수 계산
+            base_score = 0.0
+            if primary_matches > 0:
+                base_score += min(0.5, primary_matches * 0.2)  # 최대 0.5
+            if related_matches > 0:
+                base_score += min(0.3, related_matches * 0.15)  # 최대 0.3
+            if context_matches > 0:
+                base_score += min(0.2, context_matches * 0.1)  # 최대 0.2
 
             # 중요도에 따른 가중치 적용
             if hasattr(issue, 'importance') and issue.importance:
-                if 'Critical' in issue.importance:
-                    score *= 1.3
-                elif 'High' in issue.importance:
-                    score *= 1.2
+                importance_lower = issue.importance.lower()
+                if 'critical' in importance_lower:
+                    base_score *= 1.3
+                elif 'high' in importance_lower:
+                    base_score *= 1.2
+                elif 'low' in importance_lower:
+                    base_score *= 0.8
 
-            issue.relevance_score = min(1.0, round(score, 2))
+            # 출처 신뢰도 가중치
+            if issue.source and issue.source != 'Unknown':
+                # 구체적인 출처가 있으면 가산점
+                base_score += 0.05
+
+                # 신뢰할 만한 출처 패턴
+                trusted_sources = ['techcrunch', 'reuters', 'bloomberg', 'ieee', 'nature',
+                                   'arxiv', 'github', 'microsoft', 'google', 'apple', 'aws']
+                if any(src in issue.source.lower() for src in trusted_sources):
+                    base_score += 0.1
+
+            # 날짜 유효성 가산점
+            if issue.published_date and issue.published_date != 'N/A':
+                base_score += 0.05
+
+            # 최종 점수 (0.0 ~ 1.0 범위로 제한)
+            issue.relevance_score = min(1.0, max(0.1, round(base_score, 2)))
 
         return issues
 
@@ -275,6 +356,9 @@ class IssueSearcher:
                 practical_section = content.split("### 4. 실무 적용 가이드")[1].split("### 5.")[0]
                 setattr(issue, 'practical_guide', practical_section.strip())
 
+            # 상세 정보에서 추가 메타데이터 추출
+            self._extract_metadata_from_details(issue, content)
+
             issue.detail_collection_time = time.time() - start_time
             logger.success(f"'{issue.title[:30]}...' 세부 정보 수집 완료 ({issue.detail_collection_time:.2f}초)")
 
@@ -284,6 +368,28 @@ class IssueSearcher:
             issue.detail_collection_time = time.time() - start_time
 
         return issue
+
+    def _extract_metadata_from_details(self, issue: IssueItem, content: str):
+        """상세 정보에서 추가 메타데이터를 추출합니다."""
+        # URL 패턴 찾기
+        urls = re.findall(r'https?://[^\s\]]+', content)
+        if urls and issue.source == 'Unknown':
+            # 첫 번째 URL에서 도메인 추출
+            domain = self._clean_source(urls[0])
+            issue.source = domain
+
+        # 날짜 정보 찾기 (상세 내용에서)
+        if not issue.published_date or issue.published_date == 'N/A':
+            date_patterns = [
+                r'(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)',
+                r'(\d{4}-\d{1,2}-\d{1,2})',
+                r'(\d{4}/\d{1,2}/\d{1,2})'
+            ]
+            for pattern in date_patterns:
+                date_match = re.search(pattern, content)
+                if date_match:
+                    issue.published_date = self._parse_date(date_match.group(1))
+                    break
 
     def _calculate_detail_confidence(self, detailed_content: str) -> float:
         """상세 정보의 신뢰도를 내용 길이에 기반하여 계산합니다.
