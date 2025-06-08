@@ -235,7 +235,6 @@ class TestLLMJudgeEdgeCases:
 
                 result = await detector.analyze_text("")
 
-                # 이 줄이 수정되었습니다.
                 assert result.confidence == pytest.approx(0.3)
 
     async def test_malformed_llm_response(self):
