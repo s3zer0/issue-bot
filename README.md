@@ -130,7 +130,7 @@ issue-bot/
 │   ├── clients/
 │   │   └── test_perplexity_client.py
 │   ├── test_*.py         # 각 모듈별 단위/통합 테스트 파일
-│   └── conftest.py       # (오타 수정) 공통 테스트 픽스처 [s3zer0/issue-bot/issue-bot-d8f9672171231a53f6147d28ff5ebe0810456227/tests/testconf.py]
+│   └── conftest.py       # 공통 테스트 픽스처
 ├── .env                  # (직접 생성) API 키 등 비밀 정보
 ├── .env.example          # .env 파일 샘플
 ├── .gitignore
