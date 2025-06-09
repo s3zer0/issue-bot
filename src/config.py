@@ -8,7 +8,7 @@ API 키와 같은 민감한 정보나 애플리케이션의 동작 모드를 관
 
 import os
 import sys
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 from dotenv import load_dotenv
 from loguru import logger
@@ -69,6 +69,8 @@ class Config:
             "# Discord Bot\nDISCORD_BOT_TOKEN=your_token_here\n\n"
             "# LLM APIs\nOPENAI_API_KEY=your_key_here\nPERPLEXITY_API_KEY=your_key_here\n\n"
             "# Settings\nDEVELOPMENT_MODE=true\nLOG_LEVEL=INFO\n"
+            "# Thresholds for hallucination detection\n"
+            "MIN_CONFIDENCE_THRESHOLD=0.5\n"
         )
         try:
             # 샘플 파일 생성 및 내용 작성
@@ -153,6 +155,41 @@ class Config:
             # 변환 실패 시 경고 로그 출력 후 기본값 반환
             logger.warning("MAX_RETRY_COUNT 값이 잘못되어 기본값(3)을 사용합니다.")
             return 3
+
+    # --- 범용 Getter (새로 추가된 부분) ---
+    def get(self, key: str, default: Any = None, cast: Optional[Callable] = None) -> Any:
+        """
+        환경 변수에서 값을 가져옵니다. 기본값 및 타입 캐스팅을 지원합니다.
+        `config.get('MY_VAR', default=10, cast=int)`와 같이 사용합니다.
+
+        Args:
+            key (str): 가져올 환경 변수의 이름입니다.
+            default (Any, optional): 변수가 없을 때 반환할 기본값입니다. Defaults to None.
+            cast (Optional[Callable], optional): 값을 변환할 함수(e.g., int, float). Defaults to None.
+
+        Returns:
+            Any: 환경 변수 값. 캐스팅되었거나 기본값이 반환될 수 있습니다.
+        """
+        value = os.getenv(key)
+
+        if value is None:
+            # 환경 변수가 없으면 기본값을 반환
+            return default
+
+        if cast:
+            try:
+                # 캐스팅 함수가 있으면 값 변환 시도
+                return cast(value)
+            except (ValueError, TypeError):
+                # 변환 실패 시 경고 로그를 남기고 기본값을 반환
+                logger.warning(
+                    f"환경 변수 '{key}'의 값 '{value}'를 '{cast.__name__}' 타입으로 변환할 수 없습니다. "
+                    f"기본값인 '{default}'를 사용합니다."
+                )
+                return default
+
+        # 캐스팅이 없으면 문자열 값 그대로 반환
+        return value
 
     # --- 단계 검증 ---
     def validate_stage1_requirements(self) -> bool:
