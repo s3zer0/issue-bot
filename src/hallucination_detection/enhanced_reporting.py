@@ -100,7 +100,7 @@ class EnhancedReportGenerator:
 
     def generate_detailed_report(self, search_result: SearchResult) -> str:
         """
-        상세 마크다운 보고서를 생성합니다.
+        상세 마크다운 보고서를 생성합니다. (수정된 버전: 모든 이슈 포함)
 
         Args:
             search_result: 검색 결과
@@ -119,17 +119,20 @@ class EnhancedReportGenerator:
         # 높은 신뢰도 이슈 상세
         if high:
             report += "\n## 🟢 높은 신뢰도 이슈\n\n"
+            # 높은 신뢰도 이슈는 항상 모든 내용을 포함합니다.
             report += self._create_detailed_issues_section(high, include_all=True)
 
         # 중간 신뢰도 이슈 상세
         if moderate:
             report += "\n## 🟡 중간 신뢰도 이슈\n\n"
-            report += self._create_detailed_issues_section(moderate, include_all=False)
+            # [수정됨] 중간 신뢰도 이슈도 모든 내용을 포함하도록 변경 (include_all=True)
+            report += self._create_detailed_issues_section(moderate, include_all=True)
 
         # 낮은 신뢰도 이슈 (옵션에 따라)
         if low and self.threshold_manager.thresholds.include_low_confidence:
             report += "\n## 🔴 낮은 신뢰도 이슈 (참고용)\n\n"
-            report += self._create_low_confidence_summary(low)
+            # [수정됨] 낮은 신뢰도 이슈도 요약 대신 상세 섹션으로 생성 (include_all=True)
+            report += self._create_detailed_issues_section(low, include_all=True)
 
         # 환각 탐지 분석 요약
         report += self._create_hallucination_analysis_summary(search_result)
