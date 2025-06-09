@@ -26,6 +26,12 @@ from src.reporting import (
 )
 from src.hallucination_detection.enhanced_reporting import EnhancedReportGenerator
 from src.hallucination_detection.threshold_manager import ThresholdManager, ConfidenceLevel
+from src.keyword_generation import (
+    get_keyword_generation_status,
+    configure_keyword_generation,
+    MultiSourceKeywordResult
+)
+
 
 
 # --- 로깅 설정 ---
@@ -171,16 +177,7 @@ def validate_topic(topic: str) -> bool:
 # --- 슬래시 명령어 ---
 @bot.tree.command(name="monitor", description="특정 주제에 대한 이슈를 모니터링하고 환각 현상을 검증합니다.")
 async def monitor_command(interaction: discord.Interaction, 주제: str, 기간: str = "1주일"):
-    """이슈 모니터링 메인 명령어 (향상된 버전).
-
-    사용자로부터 주제와 기간을 입력받아 키워드 생성, 이슈 검색, 환각 탐지,
-    보고서 생성의 전체 파이프라인을 실행하고 결과를 Discord에 전송합니다.
-
-    Args:
-        interaction (discord.Interaction): 사용자의 상호작용 객체.
-        주제 (str): 분석할 주제어 (예: '양자 컴퓨팅').
-        기간 (str): 검색할 기간 (예: '3일', '2주일'). 기본값은 '1주일'.
-    """
+    """이슈 모니터링 메인 명령어 (멀티 소스 키워드 지원)."""
     user = interaction.user
     logger.info(f"📝 /monitor 명령어 수신: 사용자='{user.name}', 주제='{주제}', 기간='{기간}'")
     await interaction.response.defer(thinking=True)
@@ -196,14 +193,23 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
 
         # 초기 진행 상황 메시지 전송
         progress_embed = discord.Embed(
-            title="🔍 이슈 모니터링 시작 (3단계 환각 탐지 활성화)",
+            title="🔍 이슈 모니터링 시작 (멀티 소스 키워드 + 3단계 환각 탐지)",
             description=f"**주제**: {주제}\n**기간**: {period_description}\n\n⏳ 처리 중...",
             color=0x00aaff,
             timestamp=datetime.now()
         )
+
+        # 키워드 생성 상태 표시
+        keyword_status = get_keyword_generation_status()
+        progress_embed.add_field(
+            name="🔑 활성 키워드 소스",
+            value=", ".join(keyword_status['active_extractors']) or "없음",
+            inline=False
+        )
+
         await interaction.followup.send(embed=progress_embed)
 
-        # 1. 키워드 생성
+        # 1. 멀티 소스 키워드 생성
         keyword_result = await generate_keywords_for_topic(주제)
 
         # 2. 환각 탐지가 통합된 검색기 실행
@@ -213,8 +219,15 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
         # 3. 향상된 보고서 생성
         report_generator = EnhancedReportGenerator()
 
-        # Discord 임베드 생성
+        # Discord 임베드 생성 (키워드 정보 추가)
         result_embed = report_generator.generate_discord_embed(search_result)
+
+        # 키워드 소스 정보 추가
+        result_embed.add_field(
+            name="📌 키워드 생성 소스",
+            value=f"사용된 소스: {', '.join(keyword_status['active_extractors'])}",
+            inline=False
+        )
 
         # 상세 보고서 생성 및 저장
         detailed_report = report_generator.generate_detailed_report(search_result)
@@ -240,10 +253,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
             description=f"요청 처리 중 문제가 발생했습니다. 관리자에게 문의해주세요.\n`오류: {e}`",
             color=0xff0000
         )
-        if interaction.is_deferred():
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        await interaction.followup.send(embed=error_embed, ephemeral=True)
 
 
 @bot.tree.command(name="help", description="봇 사용법을 안내합니다.")
@@ -267,15 +277,19 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+# 기존 status_command 업데이트
 @bot.tree.command(name="status", description="봇 시스템의 현재 설정 상태를 확인합니다.")
 async def status_command(interaction: discord.Interaction):
     """봇의 API 키 설정 상태 및 활성화된 기능 단계를 보여줍니다."""
     stage = config.get_current_stage()
+    keyword_status = get_keyword_generation_status()
+
     embed = discord.Embed(
         title="📊 시스템 상태",
         description=f"현재 실행 가능한 최고 단계는 **{stage}단계**입니다.",
         color=0x00ff00
     )
+
     stage_info = config.get_stage_info()
 
     # API 키 설정 상태
@@ -283,6 +297,16 @@ async def status_command(interaction: discord.Interaction):
     embed.add_field(name="2단계: 키워드 생성 (OpenAI)", value="✅" if stage_info['stage2_openai'] else "❌", inline=True)
     embed.add_field(name="3/4단계: 이슈 검색 (Perplexity)", value="✅" if stage_info['stage3_perplexity'] else "❌",
                     inline=True)
+
+    # 멀티 소스 키워드 시스템 상태
+    embed.add_field(
+        name="🔑 멀티 소스 키워드",
+        value=(
+            f"**활성 소스**: {', '.join(keyword_status['active_extractors']) or '없음'}\n"
+            f"**총 {keyword_status['total_extractors']}개** 추출기 활성화"
+        ),
+        inline=False
+    )
 
     # 환각 탐지 시스템 상태
     if stage >= 4:
@@ -351,6 +375,143 @@ async def thresholds_command(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="keywords", description="멀티 소스 키워드 생성 시스템의 상태를 확인합니다.")
+async def keywords_command(interaction: discord.Interaction):
+    """키워드 생성 시스템의 상태를 표시합니다."""
+    status = get_keyword_generation_status()
+
+    embed = discord.Embed(
+        title="🔑 멀티 소스 키워드 시스템 상태",
+        description="현재 활성화된 키워드 추출 소스와 설정입니다.",
+        color=0x00ff00
+    )
+
+    # 활성 추출기
+    active_extractors = status['active_extractors']
+    if active_extractors:
+        extractors_text = "\n".join([f"• {name}" for name in active_extractors])
+        embed.add_field(
+            name=f"✅ 활성 추출기 ({len(active_extractors)}개)",
+            value=extractors_text,
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="❌ 활성 추출기",
+            value="활성화된 추출기가 없습니다.",
+            inline=False
+        )
+
+    # API 가용성
+    api_status = status['available_apis']
+    api_text = ""
+    for api, available in api_status.items():
+        emoji = "✅" if available else "❌"
+        api_text += f"{emoji} {api.upper()}\n"
+
+    embed.add_field(
+        name="🔌 API 상태",
+        value=api_text,
+        inline=True
+    )
+
+    # 유사도 설정
+    embed.add_field(
+        name="⚙️ 유사도 임계값",
+        value=f"{status['similarity_threshold']:.0%}",
+        inline=True
+    )
+
+    # 추가 정보
+    embed.add_field(
+        name="💡 키워드 중요도",
+        value=(
+            "• **HIGH**: 2개 이상 소스에서 발견\n"
+            "• **NORMAL**: 1개 소스에서 발견\n"
+            "• **LOW**: 낮은 신뢰도"
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+# 새로운 명령어: 키워드 테스트
+@bot.tree.command(name="test_keywords", description="특정 주제에 대한 멀티 소스 키워드를 테스트합니다.")
+async def test_keywords_command(interaction: discord.Interaction, 주제: str):
+    """키워드 생성을 테스트하고 결과를 보여줍니다."""
+    await interaction.response.defer(thinking=True)
+
+    try:
+        # 멀티 소스 키워드 생성
+        from src.keyword_generation import generate_multi_source_keywords
+
+        result = await generate_multi_source_keywords(주제)
+
+        # 결과 임베드 생성
+        embed = discord.Embed(
+            title=f"🔑 '{주제}' 키워드 생성 결과",
+            description=f"총 {len(result.keywords)}개 키워드 생성됨",
+            color=0x00aaff,
+            timestamp=datetime.now()
+        )
+
+        # 소스별 결과
+        for source_name, source_result in result.source_results.items():
+            if source_result.is_success:
+                embed.add_field(
+                    name=f"✅ {source_name}",
+                    value=f"{len(source_result.keywords)}개 키워드",
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name=f"❌ {source_name}",
+                    value=f"오류: {source_result.error[:50]}",
+                    inline=True
+                )
+
+        # 중요도별 통계
+        embed.add_field(
+            name="📊 중요도 분포",
+            value=(
+                f"• HIGH: {result.high_importance_count}개\n"
+                f"• NORMAL: {result.normal_importance_count}개\n"
+                f"• LOW: {result.low_importance_count}개\n"
+                f"• 중복 병합: {result.merged_count}개"
+            ),
+            inline=False
+        )
+
+        # 상위 키워드 표시
+        top_keywords = result.keywords[:10]
+        keywords_text = ""
+        for kw in top_keywords:
+            sources_str = ", ".join(kw.sources)
+            emoji = "🔥" if kw.importance.value == "high" else "📌"
+            keywords_text += f"{emoji} **{kw.keyword}** ({sources_str})\n"
+
+        embed.add_field(
+            name="🎯 상위 키워드",
+            value=keywords_text[:1024] or "키워드 없음",
+            inline=False
+        )
+
+        # 처리 시간
+        embed.set_footer(text=f"처리 시간: {result.total_time:.2f}초")
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"키워드 테스트 중 오류: {e}")
+        error_embed = discord.Embed(
+            title="❌ 키워드 생성 실패",
+            description=f"오류: {str(e)}",
+            color=0xff0000
+        )
+        await interaction.followup.send(embed=error_embed, ephemeral=True)
 
 
 # --- 봇 실행 ---

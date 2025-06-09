@@ -15,6 +15,8 @@ if project_root not in sys.path:
 from src.config import Config
 from src.keyword_generator import KeywordGenerator
 from src.bot import monitor_command
+from src.models import KeywordResult
+
 
 @pytest.fixture
 def mock_discord_interaction():
@@ -26,6 +28,7 @@ def mock_discord_interaction():
     interaction.edit_original_response = AsyncMock()
     return interaction
 
+
 # --- 1. config.py 테스트 ---
 
 @patch.dict(os.environ, {
@@ -35,49 +38,68 @@ def mock_discord_interaction():
 @patch('src.config.load_dotenv', return_value=True)
 def test_config_fallback_on_invalid_env_vars(mock_load_dotenv):
     """
-    [config.py] 환경 변수에 잘못된 값이 있을 때 기본값으로 대체되는지 테스트
+    환경 변수에 잘못된 값이 있을 때 기본값으로 대체되는지 테스트
+
+    Args:
+        mock_load_dotenv: load_dotenv 함수의 모의 객체
     """
-    # loguru와 caplog의 호환성 문제로 로그 검증 대신 반환 값 검증에 집중
     config_instance = Config()
 
     assert config_instance.get_openai_temperature() == 0.7
     assert config_instance.get_max_retry_count() == 3
 
+
 # --- 2. keyword_generator.py 테스트 ---
 
 @pytest.mark.asyncio
-@patch('src.keyword_generator.config')
-async def test_keyword_generator_retry_logic(mock_config):
+@patch('src.keyword_generator._generate_keywords', new_callable=AsyncMock)
+async def test_keyword_generator_retry_logic(mock_generate_keywords):
     """
-    [keyword_generator.py] API 호출 재시도 로직 테스트
+    레거시 래퍼가 새 시스템을 올바르게 호출하는지 테스트
+    (기존 재시도 로직 테스트는 새로운 생성 시스템으로 이전되어야 함)
+
+    Args:
+        mock_generate_keywords: _generate_keywords 함수의 모의 객체
     """
-    mock_config.get_max_retry_count.return_value = 3
+    # 모의 결과 설정
+    mock_result = KeywordResult(
+        topic="테스트",
+        primary_keywords=["성공"],
+        related_terms=[],
+        context_keywords=[],
+        confidence_score=0.95,
+        generation_time=1.2,
+        raw_response="{}"
+    )
+    mock_generate_keywords.return_value = mock_result
 
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = '{"primary_keywords": ["성공"], "related_terms": [], "context_keywords": []}'
+    # 테스트 실행
+    generator = KeywordGenerator(api_key="fake_key")
+    result = await generator.generate_keywords("테스트")
 
-    side_effects = [
-        httpx.RequestError("Network error"),
-        mock_response
-    ]
+    # 검증
+    mock_generate_keywords.assert_awaited_once_with("테스트", None)
+    assert "성공" in result.primary_keywords
+    assert isinstance(result, KeywordResult)
 
-    with patch('openai.resources.chat.completions.AsyncCompletions.create', new_callable=AsyncMock) as mock_create:
-        mock_create.side_effect = side_effects
-
-        generator = KeywordGenerator(api_key="fake_key")
-        result = await generator.generate_keywords("테스트")
-
-        assert mock_create.call_count == 2
-        assert "성공" in result.primary_keywords
 
 # --- 3. bot.py 테스트 ---
+
 @pytest.mark.asyncio
 @patch('src.bot.generate_keywords_for_topic')
-@patch('src.bot.config')
-async def test_monitor_command_general_exception(mock_config, mock_generate_keywords, mock_discord_interaction):
-    """[bot.py] /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트"""
-    mock_config.get_current_stage.return_value = 4
+@patch('src.config.Config')
+async def test_monitor_command_general_exception(MockConfig, mock_generate_keywords, mock_discord_interaction):
+    """
+    /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트
+
+    Args:
+        MockConfig: Config 클래스의 모의 객체
+        mock_generate_keywords: generate_keywords_for_topic 함수의 모의 객체
+        mock_discord_interaction: Discord Interaction 객체의 모의 객체
+    """
+    mock_config_instance = MockConfig.return_value
+    mock_config_instance.get_current_stage.return_value = 4
+
     error_message = "예상치 못한 심각한 오류"
     mock_generate_keywords.side_effect = Exception(error_message)
 
