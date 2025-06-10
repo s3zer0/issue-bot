@@ -5,6 +5,7 @@
 from typing import List, Dict, Optional, Set
 import asyncio
 import time
+import json
 from dataclasses import dataclass, field
 from loguru import logger
 
@@ -43,6 +44,19 @@ class MultiSourceKeywordResult:
         # 전체 신뢰도 계산 (평균)
         avg_confidence = sum(kw.confidence for kw in self.keywords) / len(self.keywords) if self.keywords else 0.5
 
+        all_trusted_domains = set()
+        for result in self.source_results.values():
+            if result.is_success and result.raw_response:
+                try:
+                    # raw_response가 JSON 형식이라고 가정하고 파싱
+                    response_data = json.loads(result.raw_response)
+                    domains = response_data.get("trusted_domains", [])
+                    if isinstance(domains, list):
+                        all_trusted_domains.update(d.lower() for d in domains)
+                except (json.JSONDecodeError, TypeError):
+                    # JSON 파싱 실패 시 무시
+                    continue
+
         return KeywordResult(
             topic=topic,
             primary_keywords=primary[:10],  # 최대 10개
@@ -50,7 +64,8 @@ class MultiSourceKeywordResult:
             context_keywords=context[:10],
             confidence_score=avg_confidence,
             generation_time=self.total_time,
-            raw_response=str(self.metadata)
+            raw_response=str(self.metadata),
+            trusted_domains = list(all_trusted_domains)
         )
 
 

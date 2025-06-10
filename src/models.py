@@ -34,6 +34,7 @@ class KeywordResult:
     confidence_score: float
     generation_time: float
     raw_response: str
+    trusted_domains: List[str] = field(default_factory=list)
 
 
 # --- Hallucination Detection Models ---
@@ -58,7 +59,6 @@ class RePPLScore:
     confidence: float
     repeated_phrases: List[str]
     analysis_details: Dict[str, Any]
-
 
 # --- Issue Search Models ---
 @dataclass

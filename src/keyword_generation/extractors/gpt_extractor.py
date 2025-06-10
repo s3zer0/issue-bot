@@ -84,16 +84,22 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
 1. **핵심 키워드 (Primary)**: 주제의 본질을 나타내는 가장 중요한 용어 (5-7개)
 2. **관련 용어 (Related)**: 구체적인 제품명, 기술명, 회사명 등 (5-7개)
 3. **맥락 키워드 (Context)**: 산업, 트렌드, 응용 분야 등 (5-7개)
+# ==========================================================
+# ✨ [추가] 신뢰 도메인 요청
+# ==========================================================
+4. **신뢰 출처 (Trusted Domains)**: 이 주제에 대해 가장 권위있는 공식 웹사이트 도메인 (3-5개)
+# ==========================================================
 
 **응답 형식 (JSON)**:
 {{
     "primary_keywords": ["키워드1", "키워드2", ...],
     "related_terms": ["용어1", "용어2", ...],
     "context_keywords": ["맥락1", "맥락2", ...],
+    "trusted_domains": ["official-site.com", "trusted-source.org", ...],
     "confidence": 0.0-1.0
 }}
 
-주의: 실재하는 검증 가능한 용어만 생성하세요."""
+주의: 실재하는 검증 가능한 용어와 도메인만 생성하세요."""
 
         if context:
             base_prompt += f"\n\n**추가 맥락**: {context}"
@@ -137,8 +143,8 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw_response, re.DOTALL)
             if not json_match:
                 raise ValueError("응답에서 JSON을 찾을 수 없습니다")
-
             data = json.loads(json_match.group())
+            data.setdefault("trusted_domains", [])
             return data
 
         except Exception as e:
@@ -148,6 +154,7 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
                 "primary_keywords": [self.preprocess_topic(raw_response.split()[0])],
                 "related_terms": [],
                 "context_keywords": [],
+                "trusted_domains": [],  # 폴백 시 빈 리스트
                 "confidence": 0.3
             }
 

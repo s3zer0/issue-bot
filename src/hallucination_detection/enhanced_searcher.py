@@ -94,9 +94,10 @@ class EnhancedIssueSearcher:
                 continue
 
             # 2. 각 이슈에 대해 환각 탐지 수행
+            # ✨ [수정] topic 대신 keyword_result 객체 전체를 전달
             validated_issues = await self._validate_issues(
                 search_result.issues,
-                current_keywords.topic
+                current_keywords
             )
 
             all_attempts_issues.extend(validated_issues)
@@ -145,21 +146,21 @@ class EnhancedIssueSearcher:
     async def _validate_issues(
             self,
             issues: List[IssueItem],
-            topic: str
+            keyword_result: KeywordResult  # ✨ [수정] topic에서 keyword_result로 변경
     ) -> List[IssueItem]:
         """
         이슈 목록에 대해 환각 탐지를 수행합니다.
 
         Args:
             issues (List[IssueItem]): 검증할 이슈 목록
-            topic (str): 이슈 주제
+            keyword_result (KeywordResult): 주제 및 신뢰 출처를 포함한 키워드 결과
 
         Returns:
             List[IssueItem]: 검증된 이슈 목록
         """
         # 병렬로 모든 이슈 검증
         validation_tasks = [
-            self._validate_single_issue(issue, topic)
+            self._validate_single_issue(issue, keyword_result) # ✨ [수정] keyword_result 전달
             for issue in issues
         ]
 
@@ -187,18 +188,20 @@ class EnhancedIssueSearcher:
     async def _validate_single_issue(
             self,
             issue: IssueItem,
-            topic: str
+            keyword_result: KeywordResult # ✨ [수정] topic에서 keyword_result 객체로 변경됨
     ) -> Optional[IssueItem]:
         """
         단일 이슈에 대해 환각 탐지를 수행합니다.
 
         Args:
             issue (IssueItem): 검증할 이슈
-            topic (str): 이슈 주제
+            keyword_result (KeywordResult): 주제 및 동적 신뢰 출처 리스트를 포함한 키워드 결과 객체
 
         Returns:
             Optional[IssueItem]: 검증 통과 시 이슈, 실패 시 None
         """
+        topic = keyword_result.topic
+
         try:
             # 1. 각 탐지기로 분석 수행
             individual_scores = {}
@@ -225,7 +228,6 @@ class EnhancedIssueSearcher:
             if ('LLM-Judge' in self.detectors and
                     self.threshold_manager.should_proceed_to_next_detector(
                         current_confidence, 'LLM-Judge')):
-                # 상세 내용이 있으면 포함하여 평가
                 text_to_judge = issue.summary
                 if issue.detailed_content:
                     text_to_judge = f"{issue.summary}\n\n{issue.detailed_content[:1000]}"
@@ -250,17 +252,31 @@ class EnhancedIssueSearcher:
             setattr(issue, 'hallucination_analysis', combined_score)
             setattr(issue, 'hallucination_confidence', combined_score.final_confidence)
 
-            # 5. 보고서 포함 여부 결정
-            if self.threshold_manager.should_include_in_report(combined_score.final_confidence):
+            # 5. 동적 신뢰 출처 리스트를 사용한 보너스 적용
+            trusted_sources = keyword_result.trusted_domains
+            if trusted_sources and issue.source and any(source in issue.source.lower() for source in trusted_sources):
+                bonus = 0.15  # 15% 보너스 점수
+                original_confidence = combined_score.final_confidence
+                # 보너스를 적용하되, 신뢰도가 1.0을 넘지 않도록 조정
+                adjusted_confidence = min(1.0, original_confidence + bonus)
+                setattr(issue, 'hallucination_confidence', adjusted_confidence)
+                logger.info(
+                    f"이슈 '{issue.title[:30]}...' 신뢰도 보너스 적용! "
+                    f"(출처: {issue.source}, {original_confidence:.1%} -> {adjusted_confidence:.1%})"
+                )
+
+            # 6. 보고서 포함 여부 결정 (보너스가 적용된 최종 신뢰도로 판단)
+            final_confidence_for_report = getattr(issue, 'hallucination_confidence')
+            if self.threshold_manager.should_include_in_report(final_confidence_for_report):
                 # 신뢰도 레벨 추가
                 confidence_level = self.threshold_manager.classify_confidence(
-                    combined_score.final_confidence
+                    final_confidence_for_report
                 )
                 setattr(issue, 'confidence_level', confidence_level)
 
                 logger.debug(
                     f"이슈 '{issue.title[:30]}...' 검증 통과 "
-                    f"(신뢰도: {combined_score.final_confidence:.2f}, "
+                    f"(신뢰도: {final_confidence_for_report:.2f}, "
                     f"등급: {confidence_level.value})"
                 )
 
@@ -268,7 +284,7 @@ class EnhancedIssueSearcher:
             else:
                 logger.warning(
                     f"이슈 '{issue.title[:30]}...' 제외됨 - "
-                    f"신뢰도: {combined_score.final_confidence:.2f} < "
+                    f"신뢰도: {final_confidence_for_report:.2f} < "
                     f"{self.threshold_manager.thresholds.min_confidence_threshold}"
                 )
 

@@ -1,4 +1,4 @@
-"""자동화된 E2E(End-to-End) 테스트 스크립트 (향상된 버전).
+"""자동화된 E2E(End-to-End) 테스트 스크립트
 
 이 스크립트는 Discord 봇을 직접 실행하지 않고,
 키워드 생성부터 이슈 검색, 환각 탐지, 보고서 생성까지의
@@ -7,7 +7,6 @@
 
 import asyncio
 import os
-from datetime import datetime
 
 # --- 코어 로직 임포트 ---
 try:
@@ -24,8 +23,8 @@ except ImportError as e:
 
 
 # --- 💡 테스트 파라미터 💡 ---
-TEST_TOPIC = "iOS"
-TEST_PERIOD = "최근 1주일"
+TEST_TOPIC = "WWDC"
+TEST_PERIOD = "최근 2일"
 
 
 async def main():

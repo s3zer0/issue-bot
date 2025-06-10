@@ -47,6 +47,10 @@ class PerplexityClient:
             "Authorization": f"Bearer {self.api_key}",  # 인증 헤더
             "Content-Type": "application/json"  # 요청 본문 형식
         }
+        self._client = httpx.AsyncClient(
+            headers=self.headers,
+            timeout=self.timeout
+        )
         logger.info(f"PerplexityClient 초기화 완료 (모델: {self.model})")
 
     async def _make_api_call(self, prompt: str) -> Dict[str, Any]:
@@ -83,7 +87,7 @@ class PerplexityClient:
             for attempt in range(self.max_retries):
                 try:
                     # API POST 요청 실행
-                    response = await client.post(self.base_url, headers=self.headers, json=payload)
+                    response = await self._client.post(self.base_url, json=payload)
                     response.raise_for_status()  # 2xx가 아닌 상태 코드에 대해 예외 발생
                     return response.json()  # 성공 시 JSON 응답 반환
                 except httpx.HTTPStatusError as e:
@@ -163,3 +167,8 @@ class PerplexityClient:
 
         # 공통 API 호출 메서드 실행
         return await self._make_api_call(prompt)
+
+    async def close(self):
+        """애플리케이션 종료 시 클라이언트를 안전하게 닫습니다."""
+        await self._client.aclose()
+        logger.info("PerplexityClient가 안전하게 종료되었습니다.")
