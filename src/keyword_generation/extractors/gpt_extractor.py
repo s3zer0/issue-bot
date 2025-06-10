@@ -1,5 +1,5 @@
 """
-GPT 기반 키워드 추출기 (기존 코드 리팩토링).
+GPT 기반 키워드 추출기 - 웹 검색 기능 추가 버전.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ from ..base import BaseKeywordExtractor, KeywordExtractionResult, KeywordItem, K
 
 
 class GPTKeywordExtractor(BaseKeywordExtractor):
-    """OpenAI GPT를 사용한 키워드 추출기."""
+    """OpenAI GPT를 사용한 키워드 추출기 - 웹 검색 기능 포함."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """GPT 추출기 초기화."""
@@ -31,8 +31,23 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
         self.max_tokens = config.get_openai_max_tokens()
         self.max_retries = config.get_max_retry_count()
 
+        # 🔍 웹 검색 기능 추가
+        self.perplexity_client = None
+        self._initialize_search_client()
+
         self.is_initialized = True
-        logger.info(f"GPT 키워드 추출기 초기화 완료 (모델: {self.model})")
+        logger.info(f"GPT 키워드 추출기 초기화 완료 (모델: {self.model}, 웹 검색: {'활성화' if self.perplexity_client else '비활성화'})")
+
+    def _initialize_search_client(self):
+        """Perplexity 클라이언트 초기화."""
+        try:
+            from src.clients.perplexity_client import PerplexityClient
+            self.perplexity_client = PerplexityClient()
+            logger.info("웹 검색 클라이언트 초기화 완료")
+        except ImportError:
+            logger.warning("Perplexity 클라이언트를 찾을 수 없습니다. 웹 검색 기능이 비활성화됩니다.")
+        except Exception as e:
+            logger.warning(f"웹 검색 클라이언트 초기화 실패: {e}")
 
     async def extract_keywords(
         self,
@@ -48,8 +63,11 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
             # 프롬프트 생성
             prompt = self._build_prompt(topic, context, max_keywords)
 
-            # API 호출
-            raw_response = await self._call_gpt(prompt)
+            # 웹 검색 기능을 포함한 API 호출
+            if self.perplexity_client:
+                raw_response = await self._call_gpt_with_search(prompt)
+            else:
+                raw_response = await self._call_gpt(prompt)
 
             # 응답 파싱
             keywords = self._parse_response(raw_response)
@@ -62,7 +80,10 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
                 source_name=self.name,
                 extraction_time=time.time() - start_time,
                 raw_response=raw_response,
-                metadata={'model': self.model}
+                metadata={
+                    'model': self.model,
+                    'web_search_available': self.perplexity_client is not None
+                }
             )
 
         except Exception as e:
@@ -80,26 +101,23 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
 
 **목적**: 이 키워드들은 최신 뉴스, 기술 문서, 연구 논문에서 관련 정보를 찾는 데 사용됩니다.
 
+**키워드 생성 지침**:
+- 최신 기술, 제품, 트렌드에 대해서는 2024-2025년 현재 정보를 반영하세요
+- 검증 가능한 실제 용어만 생성하세요
+- 추측이나 창작은 금지됩니다
+
 **키워드 카테고리**:
 1. **핵심 키워드 (Primary)**: 주제의 본질을 나타내는 가장 중요한 용어 (5-7개)
 2. **관련 용어 (Related)**: 구체적인 제품명, 기술명, 회사명 등 (5-7개)
 3. **맥락 키워드 (Context)**: 산업, 트렌드, 응용 분야 등 (5-7개)
-# ==========================================================
-# ✨ [추가] 신뢰 도메인 요청
-# ==========================================================
-4. **신뢰 출처 (Trusted Domains)**: 이 주제에 대해 가장 권위있는 공식 웹사이트 도메인 (3-5개)
-# ==========================================================
 
 **응답 형식 (JSON)**:
 {{
     "primary_keywords": ["키워드1", "키워드2", ...],
     "related_terms": ["용어1", "용어2", ...],
     "context_keywords": ["맥락1", "맥락2", ...],
-    "trusted_domains": ["official-site.com", "trusted-source.org", ...],
     "confidence": 0.0-1.0
-}}
-
-주의: 실재하는 검증 가능한 용어와 도메인만 생성하세요."""
+}}"""
 
         if context:
             base_prompt += f"\n\n**추가 맥락**: {context}"
@@ -107,7 +125,7 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
         return base_prompt
 
     async def _call_gpt(self, prompt: str) -> str:
-        """GPT API 호출."""
+        """기본 GPT API 호출 (웹 검색 없음)."""
         for attempt in range(self.max_retries):
             try:
                 request_params = {
@@ -136,6 +154,120 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
                     raise
                 await asyncio.sleep(2 ** attempt)
 
+    async def _call_gpt_with_search(self, prompt: str) -> str:
+        """웹 검색 기능이 포함된 GPT API 호출."""
+
+        # 웹 검색 함수 정의
+        search_function = {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "최신 정보나 사실 확인이 필요할 때 웹을 검색합니다",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "검색할 키워드나 질문"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+
+        for attempt in range(self.max_retries):
+            try:
+                # 첫 번째 GPT 호출 (검색 함수 포함)
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """당신은 키워드 생성 전문가입니다. 
+최신 정보가 필요한 경우 web_search 함수를 사용하여 정확한 정보를 확인하세요.
+최종적으로는 반드시 유효한 JSON 형식으로 키워드를 응답하세요."""
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    tools=[search_function],
+                    tool_choice="auto",
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
+                )
+
+                message = response.choices[0].message
+
+                # Function call이 있는지 확인
+                if message.tool_calls:
+                    logger.debug(f"GPT가 웹 검색 요청: {len(message.tool_calls)}개 검색")
+
+                    # 검색 수행
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": """당신은 키워드 생성 전문가입니다. 
+검색 결과를 참고하여 정확하고 최신의 키워드를 JSON 형식으로 생성하세요."""
+                        },
+                        {"role": "user", "content": prompt},
+                        message
+                    ]
+
+                    for tool_call in message.tool_calls:
+                        if tool_call.function.name == "web_search":
+                            args = json.loads(tool_call.function.arguments)
+                            query = args.get("query", "")
+
+                            logger.debug(f"웹 검색 수행: {query}")
+
+                            # 실제 웹 검색 수행
+                            search_result = await self._perform_web_search(query)
+
+                            # 검색 결과를 대화에 추가
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": search_result
+                            })
+
+                    # 검색 결과를 포함한 최종 응답 생성
+                    final_response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens
+                    )
+
+                    return final_response.choices[0].message.content.strip()
+                else:
+                    # 검색 없이 바로 응답
+                    return message.content.strip()
+
+            except Exception as e:
+                logger.warning(f"GPT Function Call API 호출 실패 (시도 {attempt + 1}): {e}")
+                if attempt == self.max_retries - 1:
+                    # 웹 검색 실패 시 기본 방법으로 폴백
+                    logger.warning("웹 검색 실패, 기본 GPT 호출로 폴백")
+                    return await self._call_gpt(prompt)
+                await asyncio.sleep(2 ** attempt)
+
+    async def _perform_web_search(self, query: str) -> str:
+        """실제 웹 검색 수행."""
+        try:
+            if self.perplexity_client:
+                # Perplexity API로 검색
+                result = await self.perplexity_client._make_api_call(
+                    f"{query}에 대한 최신 정보와 공식 발표 내용을 검색해주세요. "
+                    f"특히 정확한 제품명, 버전, 출시일, 기술 사양 등을 포함해주세요."
+                )
+                return f"검색 결과: {result}"
+            else:
+                return f"검색 클라이언트 없음: {query}"
+
+        except Exception as e:
+            logger.warning(f"웹 검색 실패: {e}")
+            return f"검색 실패: {query} (오류: {str(e)})"
+
     def _parse_response(self, raw_response: str) -> dict:
         """GPT 응답 파싱."""
         try:
@@ -143,18 +275,26 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw_response, re.DOTALL)
             if not json_match:
                 raise ValueError("응답에서 JSON을 찾을 수 없습니다")
+
             data = json.loads(json_match.group())
-            data.setdefault("trusted_domains", [])
+
+            # 필수 필드 확인 및 기본값 설정
+            data.setdefault("primary_keywords", [])
+            data.setdefault("related_terms", [])
+            data.setdefault("context_keywords", [])
+            data.setdefault("confidence", 0.8)
+
             return data
 
         except Exception as e:
             logger.error(f"GPT 응답 파싱 실패: {e}")
+            logger.debug(f"원본 응답: {raw_response}")
+
             # 폴백: 기본 구조 반환
             return {
-                "primary_keywords": [self.preprocess_topic(raw_response.split()[0])],
+                "primary_keywords": [self.preprocess_topic(raw_response.split()[0]) if raw_response else "키워드"],
                 "related_terms": [],
                 "context_keywords": [],
-                "trusted_domains": [],  # 폴백 시 빈 리스트
                 "confidence": 0.3
             }
 

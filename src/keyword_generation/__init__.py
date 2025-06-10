@@ -63,13 +63,23 @@ def _initialize_default_manager() -> MultiSourceKeywordManager:
         except Exception as e:
             logger.warning(f"Perplexity 추출기 초기화 실패: {e}")
 
-    # 3. Grok 추출기 (시뮬레이션 모드로 항상 활성화)
-    try:
-        grok_extractor = GrokKeywordExtractor()  # API 키 없이도 동작
-        extractors.append(grok_extractor)
-        logger.success("Grok 키워드 추출기 활성화 (시뮬레이션 모드)")
-    except Exception as e:
-        logger.warning(f"Grok 추출기 초기화 실패: {e}")
+    # 3. Grok 추출기 (실제 API 키 확인 후 동작)
+    grok_api_key = config.get_grok_api_key()
+    if grok_api_key:
+        try:
+            grok_extractor = GrokKeywordExtractor(api_key=grok_api_key)
+            extractors.append(grok_extractor)
+            logger.success("Grok 키워드 추출기 활성화 (실제 API 모드)")
+        except Exception as e:
+            logger.warning(f"Grok 추출기 초기화 실패: {e}")
+    else:
+        # API 키가 없는 경우에만 시뮬레이션 모드로 동작
+        try:
+            grok_extractor = GrokKeywordExtractor()  # API 키 없이 시뮬레이션 모드
+            extractors.append(grok_extractor)
+            logger.success("Grok 키워드 추출기 활성화 (시뮬레이션 모드)")
+        except Exception as e:
+            logger.warning(f"Grok 추출기 초기화 실패: {e}")
 
     # 매니저 생성
     manager = MultiSourceKeywordManager(
@@ -198,12 +208,16 @@ def configure_keyword_generation(
     if enable_perplexity and config.get_perplexity_api_key():
         extractors.append(PerplexityKeywordExtractor())
 
-    if enable_grok and config.get_grok_api_key():
-        extractors.append(GrokKeywordExtractor())
-        logger.info("Grok 키워드 추출기 활성화됨")
-    elif enable_grok:
-        extractors.append(GrokKeywordExtractor())
-        logger.info("Grok 키워드 추출기 활성화됨 (시뮬레이션 모드)")
+    if enable_grok:
+        grok_api_key = config.get_grok_api_key()
+        if grok_api_key:
+            # 실제 API 키가 있으면 실제 모드로 동작
+            extractors.append(GrokKeywordExtractor(api_key=grok_api_key))
+            logger.info("Grok 키워드 추출기 활성화됨 (실제 API 모드)")
+        else:
+            # API 키가 없으면 시뮬레이션 모드로 동작
+            extractors.append(GrokKeywordExtractor())
+            logger.info("Grok 키워드 추출기 활성화됨 (시뮬레이션 모드)")
 
     _global_manager = MultiSourceKeywordManager(
         extractors=extractors,
@@ -213,21 +227,32 @@ def configure_keyword_generation(
     logger.info(f"키워드 생성 시스템 재구성 완료 (추출기: {len(extractors)}개)")
 
 
+
 # 상태 확인 함수
 def get_keyword_generation_status() -> dict:
     """키워드 생성 시스템의 상태를 반환합니다."""
     manager = get_keyword_manager()
 
+    # 각 추출기의 상태 확인
+    extractor_status = {}
+    for extractor in manager.extractors:
+        if hasattr(extractor, 'simulation_mode'):
+            mode = "시뮬레이션" if extractor.simulation_mode else "실제 API"
+            extractor_status[extractor.name] = mode
+        else:
+            extractor_status[extractor.name] = "실제 API"
+
     return {
         'active_extractors': [e.name for e in manager.extractors],
+        'extractor_modes': extractor_status,
         'total_extractors': len(manager.extractors),
         'similarity_threshold': manager.similarity_analyzer.similarity_threshold,
         'available_apis': {
             'gpt': bool(config.get_openai_api_key()),
             'perplexity': bool(config.get_perplexity_api_key()),
-            'grok': bool(config.get_grok_api_key())        }
+            'grok': bool(config.get_grok_api_key())
+        }
     }
-
 
 # Export
 __all__ = [

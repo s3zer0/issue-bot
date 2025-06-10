@@ -86,7 +86,7 @@ class MultiSourceKeywordManager:
         """
         self.extractors = extractors or []
         self.similarity_analyzer = similarity_analyzer or KeywordSimilarityAnalyzer()
-        self.extraction_timeout = 30  # 각 추출기의 타임아웃 (초)
+        self.extraction_timeout = 180  # 각 추출기의 타임아웃 (초)
         logger.info(
             f"멀티 소스 키워드 매니저 초기화 "
             f"(추출기: {[e.name for e in self.extractors]})"

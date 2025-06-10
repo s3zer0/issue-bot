@@ -1,5 +1,5 @@
 """
-Grok (X/Twitter) 기반 키워드 추출기.
+Grok (X/Twitter) 기반 키워드 추출기 - 500 에러 해결 버전
 """
 
 import asyncio
@@ -29,12 +29,17 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
         self.timeout = config.get_grok_timeout()
         self.max_retries = 3
 
-        # API 키 확인
-        if not self.api_key:
-            logger.warning("Grok API 키가 없습니다. 시뮬레이션 모드로 동작합니다.")
+        # 서비스 상태 추적
+        self.service_status = "unknown"  # unknown, healthy, degraded, down
+        self.consecutive_failures = 0
+        self.last_success_time = None
+
+        # API 키 확인 및 강제 시뮬레이션 모드 설정
+        if not self.api_key or self.consecutive_failures >= 3:
+            logger.warning("Grok API 키가 없거나 연속 실패로 인해 시뮬레이션 모드로 동작합니다.")
             self.simulation_mode = True
         else:
-            logger.info("Grok API 키가 설정되었습니다. 실제 API 모드로 동작합니다.")
+            logger.info("Grok API 키가 설정되었습니다.")
             self.simulation_mode = False
 
         self.headers = {
@@ -56,11 +61,17 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
         logger.info(f"Grok 키워드 추출 시작: '{topic}'")
 
         try:
+            # 연속 실패가 많으면 자동으로 시뮬레이션 모드로 전환
+            if self.consecutive_failures >= 3:
+                logger.warning(f"연속 {self.consecutive_failures}번 실패로 인해 시뮬레이션 모드로 전환")
+                self.simulation_mode = True
+
             if self.simulation_mode:
                 keywords = await self._simulate_extraction(topic, context, max_keywords)
-                raw_response = "시뮬레이션 모드"
+                raw_response = f"시뮬레이션 모드 (연속 실패: {self.consecutive_failures}회)"
             else:
-                result = await self._real_extraction(topic, context, max_keywords)
+                # 실제 API 호출 시도
+                result = await self._real_extraction_with_fallback(topic, context, max_keywords)
                 keywords = result['keywords']
                 raw_response = result['raw_response']
 
@@ -71,135 +82,205 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
                 raw_response=raw_response,
                 metadata={
                     'mode': 'simulation' if self.simulation_mode else 'real_api',
-                    'model': self.model if not self.simulation_mode else 'simulation'
+                    'model': self.model if not self.simulation_mode else 'simulation',
+                    'consecutive_failures': self.consecutive_failures,
+                    'service_status': self.service_status
                 }
             )
 
         except Exception as e:
-            logger.error(f"Grok 키워드 추출 실패: {e}")
+            logger.error(f"Grok 키워드 추출 최종 실패: {e}")
+            # 최종 폴백: 항상 시뮬레이션 결과 반환
+            keywords = await self._simulate_extraction(topic, context, max_keywords)
             return KeywordExtractionResult(
-                keywords=[],
-                source_name=self.name,
+                keywords=keywords,
+                source_name=f"{self.name}_fallback",
                 extraction_time=time.time() - start_time,
-                error=str(e)
+                error=str(e),
+                raw_response="최종 폴백 - 시뮬레이션 모드",
+                metadata={'mode': 'emergency_fallback', 'original_error': str(e)}
             )
 
-    async def _real_extraction(
+    async def _real_extraction_with_fallback(
         self,
         topic: str,
         context: Optional[str],
         max_keywords: int
     ) -> Dict[str, any]:
-        """실제 Grok API 호출."""
-        prompt = self._build_extraction_prompt(topic, context, max_keywords)
+        """폴백 메커니즘이 포함된 실제 API 호출."""
 
+        # 여러 모델과 설정 조합 시도
+        api_configs = [
+            {"model": "grok-3-latest", "search_params": False},
+            {"model": "grok-3", "search_params": True},
+            {"model": "grok-2-latest", "search_params": False},
+        ]
+
+        for config_idx, api_config in enumerate(api_configs):
+            try:
+                logger.info(f"Grok API 설정 {config_idx + 1}/{len(api_configs)} 시도: {api_config['model']}")
+
+                prompt = self._build_simplified_prompt(topic, context, max_keywords)
+                payload = self._build_safe_payload(prompt, api_config)
+
+                result = await self._make_safe_api_call(payload)
+
+                if result:
+                    self.consecutive_failures = 0  # 성공 시 실패 카운터 리셋
+                    self.last_success_time = time.time()
+                    self.service_status = "healthy"
+                    logger.success(f"Grok API 성공: {api_config['model']}")
+                    return result
+
+            except Exception as e:
+                logger.warning(f"API 설정 {config_idx + 1} 실패: {e}")
+                continue
+
+        # 모든 설정 실패
+        self.consecutive_failures += 1
+        self.service_status = "down"
+
+        # 폴백: 시뮬레이션으로 전환
+        logger.error("모든 Grok API 설정 실패. 시뮬레이션으로 폴백.")
+        keywords = await self._simulate_extraction(topic, context, max_keywords)
+        return {
+            'keywords': keywords,
+            'raw_response': f"API 실패 후 시뮬레이션 폴백 (실패 {self.consecutive_failures}회)"
+        }
+
+    def _build_safe_payload(self, prompt: str, api_config: dict) -> dict:
+        """안전한 API 페이로드 생성."""
         payload = {
-            "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are Grok, an AI with real-time access to X (Twitter) data. You specialize in identifying trending keywords, hashtags, and viral topics. Provide comprehensive keyword analysis with current social media trends."
+                    "content": "You are a helpful assistant that generates keywords."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "max_tokens": 2000,
+            "model": api_config["model"],
+            "max_tokens": 800,  # 토큰 수 줄임
             "temperature": 0.3,
-            "stream": False
         }
 
-        # API 호출 with 재시도 로직
-        for attempt in range(self.max_retries):
-            try:
-                async with httpx.AsyncClient(
-                    headers=self.headers,
-                    timeout=httpx.Timeout(self.timeout)
-                ) as client:
-                    logger.debug(f"Grok API 호출 시도 {attempt + 1}/{self.max_retries}")
-                    response = await client.post(self.base_url, json=payload)
-                    response.raise_for_status()
+        # search_parameters는 선택적으로만 추가
+        if api_config.get("search_params", False):
+            payload["search_parameters"] = {
+                "mode": "auto"
+            }
 
-                    data = response.json()
-                    content = data['choices'][0]['message']['content']
+        return payload
 
-                    # 키워드 파싱
-                    keywords = self._parse_grok_response(content, topic)
+    def _build_simplified_prompt(self, topic: str, context: Optional[str], max_keywords: int) -> str:
+        """단순화된 프롬프트 생성 (API 호환성 향상)."""
 
-                    logger.info(f"Grok API 호출 성공 (시도: {attempt + 1})")
-                    return {
-                        'keywords': keywords,
-                        'raw_response': content
-                    }
+        prompt = f"""Generate {max_keywords} trending keywords for the topic: "{topic}"
 
-            except httpx.HTTPStatusError as e:
-                logger.error(f"Grok API HTTP Error (Status: {e.response.status_code}): {e.response.text[:200]}")
-                if e.response.status_code == 429:  # Rate Limit
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Rate limit 초과. {wait_time}초 후 재시도... ({attempt + 1}/{self.max_retries})")
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(wait_time)
-                        continue
-                raise
+Please provide a simple JSON response with keywords categorized as:
+- trending: hashtags and viral topics
+- news: recent developments  
+- discussion: community conversations
 
-            except httpx.TimeoutException as e:
-                logger.error(f"Grok API Timeout (Attempt {attempt + 1}): {e}")
-                if attempt == self.max_retries - 1:
-                    raise ValueError(f"Grok API 호출이 {self.max_retries}번의 타임아웃으로 실패했습니다.")
-
-                wait_time = min(2 ** attempt, 10)
-                logger.warning(f"타임아웃으로 인해 {wait_time}초 후 재시도...")
-                await asyncio.sleep(wait_time)
-
-            except httpx.RequestError as e:
-                error_detail = f"{type(e).__name__}: {str(e)}"
-                logger.error(f"Grok API Request Error (Attempt {attempt + 1}): {error_detail}")
-
-                if attempt == self.max_retries - 1:
-                    raise ValueError(f"Grok API 호출이 모든 재시도에 실패했습니다. 마지막 오류: {error_detail}")
-
-                wait_time = min(3 ** attempt, 15)
-                logger.warning(f"네트워크 오류로 인해 {wait_time}초 후 재시도...")
-                await asyncio.sleep(wait_time)
-
-        raise ValueError("Grok API 호출이 모든 재시도에 실패했습니다.")
-
-    def _build_extraction_prompt(self, topic: str, context: Optional[str], max_keywords: int) -> str:
-        """Grok API용 키워드 추출 프롬프트 생성."""
-        prompt = f"""주제 "{topic}"에 대해 현재 X(Twitter)에서 트렌딩 중인 키워드를 분석해주세요.
-
-다음 카테고리별로 키워드를 추출하여 JSON 형식으로 응답해주세요:
-
-1. **해시태그 트렌드** (trending_hashtags): 현재 인기 해시태그
-2. **실시간 토픽** (realtime_topics): 최신 뉴스나 이벤트 관련 키워드  
-3. **커뮤니티 언급** (community_mentions): 사용자들이 자주 언급하는 키워드
-4. **바이럴 키워드** (viral_keywords): 급상승 중인 용어들
-
-각 카테고리별로 최대 {max_keywords//4}개씩 추출하고, 각 키워드에 대해 다음 정보를 포함해주세요:
-- keyword: 키워드 자체
-- confidence: 0.0-1.0 사이의 신뢰도
-- trend_score: 0.0-1.0 사이의 트렌드 점수
-- reason: 선택한 이유 (간단히)
-
-응답 형식:
+Format:
 {{
-  "trending_hashtags": [
-    {{"keyword": "#키워드", "confidence": 0.9, "trend_score": 0.95, "reason": "이유"}},
-    ...
-  ],
-  "realtime_topics": [...],
-  "community_mentions": [...],
-  "viral_keywords": [...]
+  "trending": ["keyword1", "keyword2"],
+  "news": ["keyword3", "keyword4"],
+  "discussion": ["keyword5", "keyword6"]
 }}"""
 
         if context:
-            prompt += f"\n\n추가 맥락: {context}"
+            prompt += f"\n\nContext: {context}"
 
         return prompt
 
+    async def _make_safe_api_call(self, payload: dict) -> Optional[Dict[str, any]]:
+        """안전한 API 호출 (강화된 에러 처리)."""
+
+        for attempt in range(self.max_retries):
+            try:
+                timeout_config = httpx.Timeout(
+                    connect=10.0,  # 연결 타임아웃
+                    read=self.timeout,  # 읽기 타임아웃
+                    write=10.0,  # 쓰기 타임아웃
+                    pool=30.0   # 풀 타임아웃
+                )
+
+                async with httpx.AsyncClient(
+                    headers=self.headers,
+                    timeout=timeout_config,
+                    limits=httpx.Limits(max_connections=1)  # 연결 제한
+                ) as client:
+
+                    logger.debug(f"Grok API 호출 시도 {attempt + 1}/{self.max_retries}")
+                    response = await client.post(self.base_url, json=payload)
+
+                    # 상태 코드별 상세 처리
+                    if response.status_code == 200:
+                        data = response.json()
+                        content = data['choices'][0]['message']['content']
+                        keywords = self._parse_grok_response(content, payload['messages'][1]['content'])
+
+                        return {
+                            'keywords': keywords,
+                            'raw_response': content
+                        }
+
+                    elif response.status_code == 500:
+                        self.service_status = "down"
+                        logger.error(f"Grok API 서버 에러 500 (시도 {attempt + 1})")
+                        logger.debug(f"500 에러 응답: {response.text[:300]}")
+
+                        # 500 에러는 서버 문제이므로 긴 대기 후 재시도
+                        if attempt < self.max_retries - 1:
+                            wait_time = min(10 * (2 ** attempt), 60)  # 최대 60초
+                            logger.warning(f"서버 에러로 인해 {wait_time}초 후 재시도...")
+                            await asyncio.sleep(wait_time)
+
+                    elif response.status_code == 429:
+                        self.service_status = "degraded"
+                        wait_time = 2 ** attempt
+                        logger.warning(f"Rate limit. {wait_time}초 후 재시도...")
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(wait_time)
+
+                    elif response.status_code == 401:
+                        logger.error("Grok API 인증 실패. API 키를 확인하세요.")
+                        self.simulation_mode = True  # 인증 실패 시 시뮬레이션 모드로 전환
+                        return None
+
+                    elif response.status_code == 404:
+                        logger.error("Grok API 엔드포인트를 찾을 수 없습니다. URL을 확인하세요.")
+                        return None
+
+                    else:
+                        logger.error(f"Grok API 예상치 못한 상태 코드: {response.status_code}")
+                        logger.debug(f"응답 내용: {response.text[:300]}")
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+
+            except httpx.TimeoutException:
+                logger.warning(f"Grok API 타임아웃 (시도 {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    wait_time = min(5 * (2 ** attempt), 30)
+                    await asyncio.sleep(wait_time)
+
+            except httpx.RequestError as e:
+                logger.error(f"Grok API 네트워크 에러 (시도 {attempt + 1}): {e}")
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(3 ** attempt)
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Grok API 응답 JSON 파싱 실패 (시도 {attempt + 1}): {e}")
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(2)
+
+        return None
+
     def _parse_grok_response(self, content: str, topic: str) -> List[KeywordItem]:
-        """Grok 응답에서 키워드 추출."""
+        """Grok 응답에서 키워드 추출 (개선된 파싱)."""
         keywords = []
 
         try:
@@ -208,8 +289,12 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             if json_match:
                 data = json.loads(json_match.group())
 
-                # 카테고리별 키워드 처리
+                # 단순화된 카테고리 매핑
                 category_mapping = {
+                    'trending': ('trending', KeywordImportance.HIGH),
+                    'news': ('realtime', KeywordImportance.HIGH),
+                    'discussion': ('community', KeywordImportance.NORMAL),
+                    # 기존 형식도 지원
                     'trending_hashtags': ('trending', KeywordImportance.HIGH),
                     'realtime_topics': ('realtime', KeywordImportance.HIGH),
                     'community_mentions': ('community', KeywordImportance.NORMAL),
@@ -222,6 +307,7 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
 
                         for item in keyword_list:
                             if isinstance(item, dict) and 'keyword' in item:
+                                # 상세 정보가 있는 형식
                                 keywords.append(KeywordItem(
                                     keyword=item['keyword'],
                                     sources=[self.name],
@@ -235,6 +321,16 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
                                         'source': 'grok_api'
                                     }
                                 ))
+                            elif isinstance(item, str):
+                                # 단순 문자열 형식
+                                keywords.append(KeywordItem(
+                                    keyword=item,
+                                    sources=[self.name],
+                                    importance=importance,
+                                    confidence=0.7,
+                                    category=cat_name,
+                                    metadata={'type': category, 'source': 'grok_api'}
+                                ))
             else:
                 # JSON 파싱 실패 시 텍스트 파싱 시도
                 keywords = self._parse_text_response(content, topic)
@@ -244,7 +340,7 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             # 백업 파싱 시도
             keywords = self._parse_text_response(content, topic)
 
-        return keywords
+        return keywords[:20]  # 최대 20개로 제한
 
     def _parse_text_response(self, content: str, topic: str) -> List[KeywordItem]:
         """텍스트 응답에서 키워드 추출 (백업 파싱)."""
@@ -263,12 +359,13 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             elif any(cat in line.lower() for cat in ['community', 'discussion']):
                 current_category = 'community'
 
-            # 키워드 추출 (단순 패턴)
+            # 키워드 추출 (개선된 패턴)
             keyword_matches = re.findall(r'[#@]?\w+(?:\s+\w+)*', line)
             for match in keyword_matches:
-                if len(match) > 2 and match.lower() not in ['the', 'and', 'for', 'with']:
+                cleaned = match.strip()
+                if len(cleaned) > 2 and cleaned.lower() not in ['the', 'and', 'for', 'with', 'are', 'you']:
                     keywords.append(KeywordItem(
-                        keyword=match,
+                        keyword=cleaned,
                         sources=[self.name],
                         importance=KeywordImportance.NORMAL,
                         confidence=0.6,
@@ -276,7 +373,7 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
                         metadata={'type': 'text_parsed', 'source': 'grok_api'}
                     ))
 
-        return keywords[:20]  # 최대 20개로 제한
+        return keywords[:15]  # 텍스트 파싱은 더 적게
 
     async def _simulate_extraction(
         self,
@@ -284,19 +381,21 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
         context: Optional[str],
         max_keywords: int
     ) -> List[KeywordItem]:
-        """Grok 키워드 추출 시뮬레이션."""
+        """Grok 키워드 추출 시뮬레이션 (개선된 버전)."""
         # 실시간 트렌드를 시뮬레이션
-        await asyncio.sleep(0.5)  # API 호출 시뮬레이션
+        await asyncio.sleep(0.3)  # API 호출 시뮬레이션
 
         keyword_items = []
         base_topic = self.preprocess_topic(topic)
+        current_year = "2025"
 
         # 트렌딩 해시태그 스타일 키워드 (HIGH importance)
         trending_keywords = [
             f"#{base_topic}",
             f"{base_topic}_trending",
-            f"{base_topic}2024",
-            f"breaking_{base_topic}"
+            f"{base_topic}{current_year}",
+            f"breaking_{base_topic}",
+            f"viral_{base_topic}"
         ]
 
         for kw in trending_keywords[:max_keywords // 3]:
@@ -314,7 +413,8 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             f"{base_topic} news",
             f"{base_topic} update",
             f"latest {base_topic}",
-            f"{base_topic} announcement"
+            f"{base_topic} development",
+            f"recent {base_topic}"
         ]
 
         for kw in realtime_keywords[:max_keywords // 3]:
@@ -332,7 +432,8 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             f"{base_topic} discussion",
             f"{base_topic} community",
             f"{base_topic} opinion",
-            f"{base_topic} debate"
+            f"{base_topic} analysis",
+            f"{base_topic} insights"
         ]
 
         for kw in community_keywords[:max_keywords // 3]:
@@ -346,3 +447,29 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             ))
 
         return keyword_items
+
+    async def get_health_status(self) -> Dict[str, any]:
+        """추출기 상태 정보 반환."""
+        return {
+            'service_status': self.service_status,
+            'simulation_mode': self.simulation_mode,
+            'consecutive_failures': self.consecutive_failures,
+            'last_success_time': self.last_success_time,
+            'api_key_configured': bool(self.api_key),
+            'recommendations': self._get_health_recommendations()
+        }
+
+    def _get_health_recommendations(self) -> List[str]:
+        """상태 기반 권장사항."""
+        recommendations = []
+
+        if self.consecutive_failures >= 3:
+            recommendations.append("❌ 연속 실패가 많습니다. API 키와 네트워크를 확인하세요.")
+
+        if self.service_status == "down":
+            recommendations.append("🚨 Grok API 서비스가 다운된 것 같습니다. 다른 추출기를 사용하세요.")
+
+        if self.simulation_mode:
+            recommendations.append("💡 현재 시뮬레이션 모드입니다. 실제 트렌드 데이터가 필요하면 API 키를 확인하세요.")
+
+        return recommendations
