@@ -146,52 +146,81 @@ class EnhancedIssueSearcher:
     async def _validate_issues(
             self,
             issues: List[IssueItem],
-            keyword_result: KeywordResult  # ✨ [수정] topic에서 keyword_result로 변경
+            keyword_result: KeywordResult
     ) -> List[IssueItem]:
         """
-        이슈 목록에 대해 환각 탐지를 수행합니다.
-
-        Args:
-            issues (List[IssueItem]): 검증할 이슈 목록
-            keyword_result (KeywordResult): 주제 및 신뢰 출처를 포함한 키워드 결과
-
-        Returns:
-            List[IssueItem]: 검증된 이슈 목록
+        이슈 목록에 대해 환각 탐지를 수행합니다. (세마포어를 통한 동시 실행 제한 추가)
         """
-        # 병렬로 모든 이슈 검증
+        if not issues:
+            return []
+
+        logger.info(f"환각 탐지 시작: {len(issues)}개 이슈 병렬 처리")
+        start_time = asyncio.get_event_loop().time()
+
+        # 세마포어를 사용하여 동시 실행 수 제한 (API 요금 제한 고려)
+        semaphore = asyncio.Semaphore(5)  # 최대 5개 이슈 동시 처리
+
+        async def validate_with_semaphore(issue):
+            async with semaphore:
+                return await self._validate_single_issue(issue, keyword_result)
+
+        # 모든 이슈에 대해 병렬 검증 실행
         validation_tasks = [
-            self._validate_single_issue(issue, keyword_result) # ✨ [수정] keyword_result 전달
+            validate_with_semaphore(issue)
             for issue in issues
         ]
 
-        validation_results = await asyncio.gather(*validation_tasks)
+        # 결과 수집
+        validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
 
-        # 검증을 통과한 이슈만 필터링
-        validated_issues = [
-            issue for issue in validation_results
-            if issue is not None
-        ]
+        # 성공한 결과만 필터링
+        validated_issues = []
+        for i, result in enumerate(validation_results):
+            if isinstance(result, Exception):
+                logger.error(f"이슈 {i} 검증 중 예외 발생: {result}")
+            elif result is not None:
+                validated_issues.append(result)
 
-        # 신뢰도별 분류 로깅
-        high, moderate, low = self.threshold_manager.filter_issues_by_confidence(
-            [i for i in validation_results if i is not None]
-        )
+        # 성능 및 통계 로깅
+        total_time = asyncio.get_event_loop().time() - start_time
 
-        logger.info(
-            f"환각 탐지 완료: {len(issues)}개 중 "
-            f"{len(validated_issues)}개 통과 "
-            f"(높음: {len(high)}, 보통: {len(moderate)}, 낮음: {len(low)})"
-        )
+        if validated_issues:
+            high, moderate, low = self.threshold_manager.filter_issues_by_confidence(
+                validated_issues
+            )
+
+            logger.info(
+                f"환각 탐지 완료 ({total_time:.2f}초): {len(issues)}개 중 {len(validated_issues)}개 통과 "
+                f"(높음: {len(high)}, 보통: {len(moderate)}, 낮음: {len(low)})"
+            )
+
+            # 탐지기별 성능 통계 로깅
+            detector_stats = {}
+            for issue in validated_issues:
+                analysis = getattr(issue, 'hallucination_analysis', None)
+                if analysis and hasattr(analysis, 'individual_scores'):
+                    for detector, score in analysis.individual_scores.items():
+                        if detector not in detector_stats:
+                            detector_stats[detector] = []
+                        detector_stats[detector].append(score.confidence)
+
+            # 평균 성능 로깅
+            for detector, scores in detector_stats.items():
+                if scores:
+                    avg_score = sum(scores) / len(scores)
+                    logger.info(f"{detector} 평균 신뢰도: {avg_score:.2f} ({len(scores)}개 분석)")
+        else:
+            logger.warning("검증을 통과한 이슈가 없습니다")
 
         return validated_issues
 
     async def _validate_single_issue(
             self,
             issue: IssueItem,
-            keyword_result: KeywordResult # ✨ [수정] topic에서 keyword_result 객체로 변경됨
+            keyword_result: KeywordResult
     ) -> Optional[IssueItem]:
         """
-        단일 이슈에 대해 환각 탐지를 수행합니다.
+        단일 이슈에 대해 환각 탐지를 병렬로 수행합니다. (개선된 버전)
 
         Args:
             issue (IssueItem): 검증할 이슈
@@ -203,108 +232,202 @@ class EnhancedIssueSearcher:
         topic = keyword_result.topic
 
         try:
-            # 1. 각 탐지기로 분석 수행
-            individual_scores = {}
-            current_confidence = 1.0  # 초기 신뢰도
+            # 1. 모든 탐지기를 병렬로 실행하기 위한 태스크 생성
+            detection_tasks = {}
 
-            # RePPL 분석
+            # RePPL 분석 태스크
             if 'RePPL' in self.detectors:
-                reppl_score = await self.detectors['RePPL'].analyze_issue(issue, topic)
-                individual_scores['RePPL'] = reppl_score
-                current_confidence = reppl_score.confidence
-
-            # 자기 일관성 검사 (조건부 실행)
-            if ('Self-Consistency' in self.detectors and
-                    self.threshold_manager.should_proceed_to_next_detector(
-                        current_confidence, 'Self-Consistency')):
-                consistency_score = await self.detectors['Self-Consistency'].analyze_text(
-                    issue.summary,
-                    context=issue.title
+                detection_tasks['RePPL'] = asyncio.create_task(
+                    self.detectors['RePPL'].analyze_issue(issue, topic),
+                    name=f"RePPL-{issue.title[:20]}"
                 )
-                individual_scores['Self-Consistency'] = consistency_score
-                current_confidence = min(current_confidence, consistency_score.confidence)
 
-            # LLM Judge 검사 (조건부 실행)
-            if ('LLM-Judge' in self.detectors and
-                    self.threshold_manager.should_proceed_to_next_detector(
-                        current_confidence, 'LLM-Judge')):
+            # 자기 일관성 검사 태스크
+            if 'Self-Consistency' in self.detectors:
+                detection_tasks['Self-Consistency'] = asyncio.create_task(
+                    self.detectors['Self-Consistency'].analyze_text(
+                        issue.summary,
+                        context=issue.title
+                    ),
+                    name=f"Consistency-{issue.title[:20]}"
+                )
+
+            # LLM Judge 검사 태스크
+            if 'LLM-Judge' in self.detectors:
                 text_to_judge = issue.summary
                 if issue.detailed_content:
                     text_to_judge = f"{issue.summary}\n\n{issue.detailed_content[:1000]}"
 
-                llm_judge_score = await self.detectors['LLM-Judge'].analyze_text(
-                    text_to_judge,
-                    context=f"주제: {topic}, 제목: {issue.title}"
+                detection_tasks['LLM-Judge'] = asyncio.create_task(
+                    self.detectors['LLM-Judge'].analyze_text(
+                        text_to_judge,
+                        context=f"주제: {topic}, 제목: {issue.title}"
+                    ),
+                    name=f"LLMJudge-{issue.title[:20]}"
                 )
-                individual_scores['LLM-Judge'] = llm_judge_score
 
-            # 2. 가중치 동적 조정
-            weights = self.threshold_manager.get_weights_for_confidence(current_confidence)
+            # 2. 모든 탐지기를 병렬로 실행하고 결과 수집
+            individual_scores = {}
 
-            # 3. 점수 통합
+            if detection_tasks:
+                # 모든 태스크를 병렬로 실행 (30초 타임아웃)
+                done, pending = await asyncio.wait(
+                    detection_tasks.values(),
+                    return_when=asyncio.ALL_COMPLETED,
+                    timeout=30.0
+                )
+
+                # 완료된 태스크 결과 수집
+                for task in done:
+                    task_name = task.get_name()
+                    try:
+                        result = await task
+                        # 태스크 이름에서 탐지기 유형 추출
+                        detector_type = task_name.split('-')[0]
+                        if detector_type == 'Consistency':
+                            detector_type = 'Self-Consistency'
+                        elif detector_type == 'LLMJudge':
+                            detector_type = 'LLM-Judge'
+
+                        individual_scores[detector_type] = result
+                        logger.debug(f"{detector_type} 탐지 완료: {result.confidence:.2f}")
+
+                    except Exception as e:
+                        detector_type = task_name.split('-')[0]
+                        logger.warning(f"{detector_type} 탐지 실패: {e}")
+
+                # 미완료 태스크 취소
+                for task in pending:
+                    task.cancel()
+                    detector_type = task.get_name().split('-')[0]
+                    logger.warning(f"{detector_type} 탐지 타임아웃으로 취소됨")
+
+            # 3. 결과가 없으면 None 반환
+            if not individual_scores:
+                logger.warning(f"이슈 '{issue.title}': 모든 환각 탐지기 실패")
+                return None
+
+            # 4. 가중치 동적 조정 (최고 신뢰도 기준)
+            max_confidence = max(score.confidence for score in individual_scores.values())
+            weights = self.threshold_manager.get_weights_for_confidence(max_confidence)
+
+            # 5. 점수 통합
             combined_score = CombinedHallucinationScore(
                 individual_scores=individual_scores,
                 weights=weights,
                 final_confidence=0  # __post_init__에서 계산됨
             )
 
-            # 4. 분석 결과를 이슈에 추가
+            # 6. 분석 결과를 이슈에 추가
             setattr(issue, 'hallucination_analysis', combined_score)
             setattr(issue, 'hallucination_confidence', combined_score.final_confidence)
 
-            # 5. 동적 신뢰 출처 리스트를 사용한 보너스 적용
-            trusted_sources = keyword_result.trusted_domains
-            if trusted_sources and issue.source and any(source in issue.source.lower() for source in trusted_sources):
-                bonus = 0.15  # 15% 보너스 점수
-                original_confidence = combined_score.final_confidence
-                # 보너스를 적용하되, 신뢰도가 1.0을 넘지 않도록 조정
-                adjusted_confidence = min(1.0, original_confidence + bonus)
-                setattr(issue, 'hallucination_confidence', adjusted_confidence)
-                logger.info(
-                    f"이슈 '{issue.title[:30]}...' 신뢰도 보너스 적용! "
-                    f"(출처: {issue.source}, {original_confidence:.1%} -> {adjusted_confidence:.1%})"
-                )
-
-            # 6. 보고서 포함 여부 결정 (보너스가 적용된 최종 신뢰도로 판단)
-            final_confidence_for_report = getattr(issue, 'hallucination_confidence')
-            if self.threshold_manager.should_include_in_report(final_confidence_for_report):
-                # 신뢰도 레벨 추가
-                confidence_level = self.threshold_manager.classify_confidence(
-                    final_confidence_for_report
-                )
-                setattr(issue, 'confidence_level', confidence_level)
-
+            # 7. 최소 임계값 검사
+            if combined_score.final_confidence < self.threshold_manager.thresholds.min_confidence_threshold:
                 logger.debug(
-                    f"이슈 '{issue.title[:30]}...' 검증 통과 "
-                    f"(신뢰도: {final_confidence_for_report:.2f}, "
-                    f"등급: {confidence_level.value})"
+                    f"이슈 '{issue.title}' 신뢰도 부족: "
+                    f"{combined_score.final_confidence:.2f} < "
+                    f"{self.threshold_manager.thresholds.min_confidence_threshold:.2f}"
                 )
-
-                return issue
-            else:
-                logger.warning(
-                    f"이슈 '{issue.title[:30]}...' 제외됨 - "
-                    f"신뢰도: {final_confidence_for_report:.2f} < "
-                    f"{self.threshold_manager.thresholds.min_confidence_threshold}"
-                )
-
-                # LLM Judge의 문제 영역 정보 로그
-                if 'LLM-Judge' in individual_scores:
-                    judge_score = individual_scores['LLM-Judge']
-                    if hasattr(judge_score, 'problematic_areas') and judge_score.problematic_areas:
-                        logger.warning(
-                            f"LLM Judge가 발견한 문제점: "
-                            f"{judge_score.problematic_areas[0]['issue']}"
-                        )
-
                 return None
 
-        except Exception as e:
-            logger.error(f"이슈 검증 중 오류: {e}")
-            # 오류 발생 시에도 이슈를 포함하되 낮은 신뢰도 부여
-            setattr(issue, 'hallucination_confidence', 0.0)
-            setattr(issue, 'hallucination_error', str(e))
+            # 8. 성능 메트릭 로깅
+            detection_summary = ", ".join([
+                f"{k}: {v.confidence:.2f}"
+                for k, v in individual_scores.items()
+            ])
+
+            logger.debug(
+                f"이슈 '{issue.title}' 검증 완료 - "
+                f"개별 점수: [{detection_summary}], "
+                f"최종 신뢰도: {combined_score.final_confidence:.2f}"
+            )
+
             return issue
+
+        except asyncio.CancelledError:
+            logger.warning(f"이슈 '{issue.title}' 검증이 취소되었습니다")
+            return None
+        except Exception as e:
+            logger.error(f"이슈 '{issue.title}' 검증 중 오류 발생: {e}")
+            return None
+
+    # 추가로 _validate_issues 메서드도 다음과 같이 개선할 수 있습니다:
+
+    async def _validate_issues(
+            self,
+            issues: List[IssueItem],
+            keyword_result: KeywordResult
+    ) -> List[IssueItem]:
+        """
+        이슈 목록에 대해 환각 탐지를 수행합니다. (세마포어를 통한 동시 실행 제한 추가)
+
+        Args:
+            issues (List[IssueItem]): 검증할 이슈 목록
+            keyword_result (KeywordResult): 주제 및 신뢰 출처를 포함한 키워드 결과
+
+        Returns:
+            List[IssueItem]: 검증된 이슈 목록
+        """
+        if not issues:
+            return []
+
+        logger.info(f"환각 탐지 시작: {len(issues)}개 이슈 병렬 처리")
+
+        # 세마포어를 사용하여 동시 실행 수 제한 (API 요금 제한 고려)
+        semaphore = asyncio.Semaphore(5)  # 최대 5개 이슈 동시 처리
+
+        async def validate_with_semaphore(issue):
+            async with semaphore:
+                return await self._validate_single_issue(issue, keyword_result)
+
+        # 모든 이슈에 대해 병렬 검증 실행
+        validation_tasks = [
+            validate_with_semaphore(issue)
+            for issue in issues
+        ]
+
+        # 결과 수집
+        validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
+
+        # 성공한 결과만 필터링
+        validated_issues = []
+        for i, result in enumerate(validation_results):
+            if isinstance(result, Exception):
+                logger.error(f"이슈 {i} 검증 중 예외 발생: {result}")
+            elif result is not None:
+                validated_issues.append(result)
+
+        # 신뢰도별 분류 로깅
+        if validated_issues:
+            high, moderate, low = self.threshold_manager.filter_issues_by_confidence(
+                validated_issues
+            )
+
+            logger.info(
+                f"환각 탐지 완료: {len(issues)}개 중 {len(validated_issues)}개 통과 "
+                f"(높음: {len(high)}, 보통: {len(moderate)}, 낮음: {len(low)})"
+            )
+
+            # 탐지기별 성능 통계 로깅
+            detector_stats = {}
+            for issue in validated_issues:
+                analysis = getattr(issue, 'hallucination_analysis', None)
+                if analysis and hasattr(analysis, 'individual_scores'):
+                    for detector, score in analysis.individual_scores.items():
+                        if detector not in detector_stats:
+                            detector_stats[detector] = []
+                        detector_stats[detector].append(score.confidence)
+
+            # 평균 성능 로깅
+            for detector, scores in detector_stats.items():
+                if scores:
+                    avg_score = sum(scores) / len(scores)
+                    logger.info(f"{detector} 평균 신뢰도: {avg_score:.2f} ({len(scores)}개 분석)")
+        else:
+            logger.warning("검증을 통과한 이슈가 없습니다")
+
+        return validated_issues
 
     def update_threshold_config(self, new_config: ThresholdManager):
         """
