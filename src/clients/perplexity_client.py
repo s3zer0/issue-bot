@@ -40,7 +40,7 @@ class PerplexityClient:
 
         # API 요청에 필요한 기본 설정
         self.base_url = "https://api.perplexity.ai/chat/completions"
-        self.model = "llama-3.1-sonar-large-128k-online"  # 사용할 LLM 모델
+        self.model = "sonar-deep-research"  # 사용할 LLM 모델
         self.timeout = 60  # HTTP 요청 타임아웃 (초)
         self.max_retries = 3  # 최대 재시도 횟수
         self.headers = {
