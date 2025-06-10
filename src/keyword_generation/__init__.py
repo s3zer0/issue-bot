@@ -198,8 +198,12 @@ def configure_keyword_generation(
     if enable_perplexity and config.get_perplexity_api_key():
         extractors.append(PerplexityKeywordExtractor())
 
-    if enable_grok:
+    if enable_grok and config.get_grok_api_key():
         extractors.append(GrokKeywordExtractor())
+        logger.info("Grok 키워드 추출기 활성화됨")
+    elif enable_grok:
+        extractors.append(GrokKeywordExtractor())
+        logger.info("Grok 키워드 추출기 활성화됨 (시뮬레이션 모드)")
 
     _global_manager = MultiSourceKeywordManager(
         extractors=extractors,
@@ -221,8 +225,7 @@ def get_keyword_generation_status() -> dict:
         'available_apis': {
             'gpt': bool(config.get_openai_api_key()),
             'perplexity': bool(config.get_perplexity_api_key()),
-            'grok': False  # 아직 API 미공개
-        }
+            'grok': bool(config.get_grok_api_key())        }
     }
 
 

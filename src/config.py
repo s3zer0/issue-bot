@@ -67,10 +67,14 @@ class Config:
         # 샘플 .env 파일의 기본 템플릿 정의
         content = (
             "# Discord Bot\nDISCORD_BOT_TOKEN=your_token_here\n\n"
-            "# LLM APIs\nOPENAI_API_KEY=your_key_here\nPERPLEXITY_API_KEY=your_key_here\n\n"
+            "# LLM APIs\nOPENAI_API_KEY=your_key_here\n"
+            "PERPLEXITY_API_KEY=your_key_here\n"
+            "GROK_API_KEY=your_key_here\n\n"
             "# Settings\nDEVELOPMENT_MODE=true\nLOG_LEVEL=INFO\n"
+            "OPENAI_MODEL=gpt-4o\nGROK_MODEL=grok-beta\n"
             "# Thresholds for hallucination detection\n"
             "MIN_CONFIDENCE_THRESHOLD=0.5\n"
+            "# API Timeouts\nGROK_TIMEOUT=60\n"
         )
         try:
             # 샘플 파일 생성 및 내용 작성
@@ -97,6 +101,12 @@ class Config:
     def get_perplexity_api_key(self) -> Optional[str]:
         """Perplexity API 키를 반환합니다. 플레이스홀더 값은 None으로 처리합니다."""
         api_key = os.getenv('PERPLEXITY_API_KEY')
+        # 유효한 API 키인지 확인 후 반환
+        return api_key if api_key and 'your_key_here' not in api_key else None
+
+    def get_grok_api_key(self) -> Optional[str]:
+        """Grok API 키를 반환합니다. 플레이스홀더 값은 None으로 처리합니다."""
+        api_key = os.getenv('GROK_API_KEY')
         # 유효한 API 키인지 확인 후 반환
         return api_key if api_key and 'your_key_here' not in api_key else None
 
@@ -136,11 +146,26 @@ class Config:
             logger.warning("OPENAI_MAX_TOKENS 값이 잘못되어 기본값(1500)을 사용합니다.")
             return 1500
 
+    def get_grok_model(self) -> str:
+        """Grok 모델 이름을 반환합니다."""
+        # 환경 변수에서 GROK_MODEL 값을 가져오며, 기본값은 grok-beta
+        return os.getenv('GROK_MODEL', 'grok-3-lastest')
+
+    def get_grok_timeout(self) -> int:
+        """Grok API의 타임아웃 설정 값을 반환합니다."""
+        try:
+            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 60
+            return int(os.getenv('GROK_TIMEOUT', 60))
+        except (ValueError, TypeError):
+            # 변환 실패 시 경고 로그 출력 후 기본값 반환
+            logger.warning("GROK_TIMEOUT 값이 잘못되어 기본값(60)을 사용합니다.")
+            return 60
+
     def get_keyword_generation_timeout(self) -> int:
         """키워드 생성 시 타임아웃(초) 설정 값을 반환합니다."""
         try:
-            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 30
-            return int(os.getenv('KEYWORD_GENERATION_TIMEOUT', 30))
+            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 300
+            return int(os.getenv('KEYWORD_GENERATION_TIMEOUT', 300))
         except (ValueError, TypeError):
             # 변환 실패 시 경고 로그 출력 후 기본값 반환
             logger.warning("KEYWORD_GENERATION_TIMEOUT 값이 잘못되어 기본값(30)을 사용합니다.")

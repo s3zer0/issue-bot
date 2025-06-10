@@ -40,8 +40,8 @@ class PerplexityClient:
 
         # API 요청에 필요한 기본 설정
         self.base_url = "https://api.perplexity.ai/chat/completions"
-        self.model = "sonar-deep-research"  # 사용할 LLM 모델
-        self.timeout = 60  # HTTP 요청 타임아웃 (초)
+        self.model = "sonar-pro"  # 사용할 LLM 모델
+        self.timeout = 300  # HTTP 요청 타임아웃 (초)
         self.max_retries = 3  # 최대 재시도 횟수
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",  # 인증 헤더
@@ -78,8 +78,8 @@ class PerplexityClient:
                 {"role": "system", "content": "You are a precise and objective information analysis expert. Always provide specific source URLs and publication dates when available."},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 10000,  # 최대 응답 토큰 수
-            "temperature": 0.3  # 응답의 창의성 조절 (낮을수록 보수적)
+            "max_tokens": 20000,  # 최대 응답 토큰 수
+            "temperature": 0.20  # 응답의 창의성 조절
         }
 
         # 비동기 HTTP 클라이언트 생성

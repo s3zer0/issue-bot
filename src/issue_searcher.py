@@ -41,7 +41,7 @@ class IssueSearcher:
             self,
             keyword_result: KeywordResult,
             time_period: str,
-            max_total_results: int = 20,
+            max_total_results: int = 50,
             collect_details: bool = True
     ) -> SearchResult:
         """키워드를 기반으로 이슈를 검색하고, 필요 시 상세 정보를 비동기적으로 수집합니다.
