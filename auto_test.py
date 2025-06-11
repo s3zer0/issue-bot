@@ -30,8 +30,8 @@ except ImportError as e:
 
 
 # --- 💡 테스트 파라미터 💡 ---
-TEST_TOPIC = "WWDC"
-TEST_PERIOD = "최근 2일"
+TEST_TOPIC = "iOS"
+TEST_PERIOD = "최근 일주일"
 
 
 async def main():
@@ -41,7 +41,6 @@ async def main():
     print(f"   (기간: {TEST_PERIOD}, 3단계 환각 탐지 활성화)")
     print("-" * 60)
 
-    # --- ✨ 수정된 부분: 변수 초기화 ✨ ---
     # 오류 발생 시 UnboundLocalError를 방지하기 위해 변수를 미리 None으로 설정합니다.
     markdown_path = None
     pdf_path = None

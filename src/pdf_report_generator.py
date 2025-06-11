@@ -24,6 +24,7 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from loguru import logger
 import openai
@@ -56,32 +57,38 @@ class PDFReportGenerator:
         logger.info("PDF 보고서 생성기 초기화 완료")
 
     def _setup_fonts(self):
-        """한글 지원을 위한 폰트 설정."""
+        """한글 지원을 위한 폰트 설정 (SF Pro Text 우선 사용)."""
         try:
-            # Windows
-            if os.name == 'nt':
-                font_path = "C:/Windows/Fonts/malgun.ttf"
-                if os.path.exists(font_path):
-                    pdfmetrics.registerFont(TTFont('MalgunGothic', font_path))
-                    self.default_font = 'MalgunGothic'
-                else:
-                    self.default_font = 'Helvetica'
-            # macOS/Linux
+            # pdfmetrics.registerFont(UnicodeCIDFont('UniKS-UCS2-H'))
+            # macOS/Linux - 프로젝트 폴더 내 Fonts 디렉토리
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            sf_path = os.path.join(project_root, "Fonts", "NotoSansKR-VariableFont_wght.ttf")
+            if os.path.exists(sf_path):
+                logger.info("NotoSans 설정")
+                pdfmetrics.registerFont(TTFont('NotoSansKR', sf_path))
+                self.default_font = 'NotoSansKR'
             else:
-                # 시스템에 설치된 한글 폰트 찾기
-                font_paths = [
-                    '/System/Library/Fonts/AppleSDGothicNeo.ttc',  # macOS
-                    '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',  # Linux
-                ]
-                for font_path in font_paths:
-                    if os.path.exists(font_path):
-                        pdfmetrics.registerFont(TTFont('NanumGothic', font_path))
-                        self.default_font = 'NanumGothic'
-                        break
+                # 대체: 시스템에 있던 NanumGothic 또는 MalgunGothic 사용
+                # (기존 로직 유지)
+                # Windows
+                if os.name == 'nt':
+                    malgun = "C:/Windows/Fonts/malgun.ttf"
+                    if os.path.exists(malgun):
+                        pdfmetrics.registerFont(TTFont('MalgunGothic', malgun))
+                        self.default_font = 'MalgunGothic'
+                    else:
+                        self.default_font = 'Helvetica'
                 else:
-                    self.default_font = 'Helvetica'
+                    # macOS에서 SF Pro가 없을 경우 시스템 한글 폰트
+                    nanum = "/Library/Fonts/NanumGothic.ttf"
+                    if os.path.exists(nanum):
+                        pdfmetrics.registerFont(TTFont('NanumGothic', nanum))
+                        self.default_font = 'NanumGothic'
+                    else:
+                        self.default_font = 'Helvetica'
+                self.default_font = 'UniKS-UCS2-H'
         except Exception as e:
-            logger.warning(f"한글 폰트 설정 실패, 기본 폰트 사용: {e}")
+            logger.warning(f"폰트 설정 중 오류 발생 ({e}), 기본 Helvetica 사용")
             self.default_font = 'Helvetica'
 
     def _setup_custom_styles(self):

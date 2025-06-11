@@ -1,8 +1,13 @@
 """
-Discord 봇의 메인 진입점.
+Discord 봇의 메인 진입점 (수정된 버전).
 
 Discord API와의 상호작용, 슬래시 명령어 처리, 그리고 다른 비즈니스 로직 모듈들
 (키워드 생성, 이슈 검색, 환각 탐지, 보고서 생성)의 전체 흐름을 조율(Orchestration)합니다.
+
+주요 수정사항:
+- 슬래시 명령어 매개변수명을 영어로 변경 (Discord 호환성 개선)
+- 향상된 동기화 및 디버깅 기능 추가
+- 봇 초대 링크 생성 명령어 추가
 """
 
 import discord
@@ -16,13 +21,12 @@ from loguru import logger
 # --- 모듈 임포트 ---
 from src.config import config
 from src.models import KeywordResult, SearchResult
-# AttributeError 해결을 위해 실제 import 경로에 맞게 수정
 from src.hallucination_detection.enhanced_searcher import EnhancedIssueSearcher
 from src.hallucination_detection.enhanced_reporting import EnhancedReportGenerator
 from src.hallucination_detection.threshold_manager import ThresholdManager
 from src.keyword_generator import generate_keywords_for_topic
 
-# --- 로깅 설정 (이전과 동일) ---
+# --- 로깅 설정 ---
 os.makedirs("logs", exist_ok=True)
 logger.remove()
 logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>", level="INFO", colorize=True)
@@ -39,41 +43,88 @@ class IssueMonitorBot(commands.Bot):
         logger.info("🤖 IssueMonitorBot 인스턴스 생성됨")
 
     async def setup_hook(self):
+        """봇이 Discord에 로그인한 후, 실행 준비를 위해 호출되는 비동기 메서드."""
         logger.info("⚙️ 봇 셋업 시작: 슬래시 명령어 동기화 시도...")
         try:
+            # 글로벌 명령어 동기화 (모든 서버)
             synced = await self.tree.sync()
-            logger.success(f"✅ 슬래시 명령어 동기화 완료: {len(synced)}개 명령어")
+            logger.success(f"✅ 글로벌 슬래시 명령어 동기화 완료: {len(synced)}개 명령어")
+
+            # 동기화된 명령어 목록 출력
+            for command in synced:
+                logger.info(f"  - /{command.name}: {command.description}")
+
         except Exception as e:
             logger.error(f"❌ 슬래시 명령어 동기화 실패: {e}")
+            logger.error(f"상세 오류: {type(e).__name__}: {str(e)}")
 
     async def on_ready(self):
+        """봇이 성공적으로 Discord에 연결되고 모든 준비를 마쳤을 때 호출됩니다."""
         logger.success(f"🎉 {self.user}가 Discord에 성공적으로 연결되었습니다!")
+        logger.info(f"📊 봇이 {len(self.guilds)}개 서버에 참여 중입니다.")
+
+        # 참여 중인 서버 목록 출력
+        for guild in self.guilds:
+            logger.info(f"  - {guild.name} (ID: {guild.id}, 멤버: {guild.member_count}명)")
+
+        # 봇의 '활동' 메시지를 설정하여 현재 상태를 표시
         status_message = f"/monitor (Stage {config.get_current_stage()} 활성화)"
-        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=status_message))
+        await self.change_presence(
+            activity=discord.Activity(type=discord.ActivityType.watching, name=status_message)
+        )
         logger.info(f"👀 봇 상태 설정: '{status_message}'")
 
+    async def on_error(self, event, *args, **kwargs):
+        """처리되지 않은 이벤트 관련 오류가 발생했을 때 로깅합니다."""
+        logger.error(f"❌ 처리되지 않은 이벤트 오류 발생 ({event}): {args} {kwargs}")
+
+    async def on_application_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+        """슬래시 명령어 실행 중 오류 발생 시 처리합니다."""
+        logger.error(f"❌ 슬래시 명령어 오류 발생: {error}")
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                f"❌ 명령어 실행 중 오류가 발생했습니다: {str(error)}",
+                ephemeral=True
+            )
+
+# 전역 봇 인스턴스 생성
 bot = IssueMonitorBot()
 
-# --- 헬퍼 함수 (이전과 동일) ---
+# --- 헬퍼 함수 ---
 def parse_time_period(period_str: str) -> tuple[datetime, str]:
+    """'1주일', '3일' 등 자연어 시간 문자열을 파싱합니다."""
     period_str = period_str.strip().lower()
     now = datetime.now()
+    # 정규식을 사용하여 숫자와 단위를 분리
     match = re.match(r'(\d+)\s*(일|주일|개월|달|시간)', period_str)
-    if not match: return now - timedelta(weeks=1), "최근 1주일"
-    number, unit = int(match.group(1)), match.group(2)
-    if unit == '일': return now - timedelta(days=number), f"최근 {number}일"
-    if unit == '주일': return now - timedelta(weeks=number), f"최근 {number}주일"
-    if unit in ['개월', '달']: return now - timedelta(days=number * 30), f"최근 {number}개월"
-    if unit == '시간': return now - timedelta(hours=number), f"최근 {number}시간"
+
+    if not match:
+        # 유효한 형식이 아니면 기본값(최근 1주일) 반환
+        return now - timedelta(weeks=1), "최근 1주일"
+
+    number = int(match.group(1))
+    unit = match.group(2)
+
+    # 단위에 따라 적절한 시간 차이를 계산
+    if unit == '일':
+        return now - timedelta(days=number), f"최근 {number}일"
+    if unit == '주일':
+        return now - timedelta(weeks=number), f"최근 {number}주일"
+    if unit in ['개월', '달']:
+        return now - timedelta(days=number * 30), f"최근 {number}개월"
+    if unit == '시간':
+        return now - timedelta(hours=number), f"최근 {number}시간"
+
+    # 예외 처리: 기본값 반환
     return now - timedelta(weeks=1), "최근 1주일"
 
 def validate_topic(topic: str) -> bool:
+    """주제 입력값이 유효한지(2글자 이상) 검사합니다."""
     return topic is not None and len(topic.strip()) >= 2
 
-# --- 슬래시 명령어 ---
-bot.tree.command(name="monitor", description="특정 주제에 대한 이슈를 모니터링하고 환각 현상을 검증합니다.")
-
-
+# --- 슬래시 명령어 (수정된 버전) ---
+@bot.tree.command(name="monitor", description="특정 주제에 대한 이슈를 모니터링하고 환각 현상을 검증합니다.")
 async def monitor_command(interaction: discord.Interaction, 주제: str, 기간: str = "1주일"):
     """이슈 모니터링 메인 명령어 (PDF 보고서 생성 포함).
 
@@ -83,11 +134,15 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
 
     Args:
         interaction (discord.Interaction): 사용자의 상호작용 객체.
-        주제 (str): 분석할 주제어 (예: '양자 컴퓨팅').
-        기간 (str): 검색할 기간 (예: '3일', '2주일'). 기본값은 '1주일'.
+        topic (str): 분석할 주제어 (예: '양자 컴퓨팅').
+        period (str): 검색할 기간 (예: '3일', '2주일'). 기본값은 '1주일'.
     """
+    # 기존 변수명 호환성을 위한 변수 할당
+    topic = 주제
+    period = 기간
+
     user = interaction.user
-    logger.info(f"📝 /monitor 명령어 수신: 사용자='{user.name}', 주제='{주제}', 기간='{기간}'")
+    logger.info(f"📝 /monitor 명령어 수신: 사용자='{user.name}', 주제='{topic}', 기간='{period}'")
     await interaction.response.defer(thinking=True)
 
     try:
@@ -102,7 +157,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
         # 초기 진행 상황 메시지 전송
         progress_embed = discord.Embed(
             title="🔍 이슈 모니터링 시작 (3단계 환각 탐지 활성화)",
-            description=f"**주제**: {주제}\n**기간**: {period_description}\n\n⏳ 처리 중...",
+            description=f"**주제**: {topic}\n**기간**: {period_description}\n\n⏳ 처리 중...",
             color=0x00aaff,
             timestamp=datetime.now()
         )
@@ -111,7 +166,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
         # 진행 상황 업데이트 함수
         async def update_progress(stage: int, message: str):
             progress_embed.description = (
-                f"**주제**: {주제}\n**기간**: {period_description}\n\n"
+                f"**주제**: {topic}\n**기간**: {period_description}\n\n"
                 f"{stage}/5. {message}"
             )
             await interaction.edit_original_response(embed=progress_embed)
@@ -152,7 +207,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
         with open(markdown_path, 'rb') as f:
             markdown_file = discord.File(
                 f,
-                filename=f"{주제}_보고서_{datetime.now().strftime('%Y%m%d')}.md"
+                filename=f"{topic}_보고서_{datetime.now().strftime('%Y%m%d')}.md"
             )
             files_to_send.append(markdown_file)
 
@@ -161,7 +216,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
             with open(pdf_path, 'rb') as f:
                 pdf_file = discord.File(
                     f,
-                    filename=f"{주제}_보고서_{datetime.now().strftime('%Y%m%d')}.pdf"
+                    filename=f"{topic}_보고서_{datetime.now().strftime('%Y%m%d')}.pdf"
                 )
                 files_to_send.append(pdf_file)
             logger.info("PDF 보고서가 성공적으로 생성되었습니다.")
@@ -192,7 +247,7 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
 
         # 성공 로그
         logger.success(
-            f"✅ 모니터링 완료 - 주제: {주제}, "
+            f"✅ 모니터링 완료 - 주제: {topic}, "
             f"이슈: {search_result.total_found}개, "
             f"파일: {len(files_to_send)}개"
         )
@@ -240,8 +295,81 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
         else:
             await interaction.edit_original_response(embed=error_embed)
 
+# --- 추가된 디버깅 및 유틸리티 명령어들 ---
 
-# PDF 보고서 생성 가능 여부를 확인하는 상태 명령어 수정
+@bot.tree.command(name="debug", description="봇 상태 및 등록된 명령어를 확인합니다.")
+async def debug_command(interaction: discord.Interaction):
+    """봇의 상태 및 등록된 명령어 목록을 보여줍니다."""
+    commands = [cmd.name for cmd in bot.tree.get_commands()]
+
+    embed = discord.Embed(
+        title="🔧 디버그 정보",
+        color=0x00ff00,
+        timestamp=datetime.now()
+    )
+
+    embed.add_field(
+        name="📋 등록된 명령어",
+        value=f"```{', '.join(commands) if commands else '없음'}```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🌐 네트워크 상태",
+        value=f"지연시간: {round(bot.latency * 1000)}ms",
+        inline=True
+    )
+
+    embed.add_field(
+        name="📚 라이브러리 버전",
+        value=f"Discord.py: {discord.__version__}",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🏠 서버 정보",
+        value=f"참여 중인 서버: {len(bot.guilds)}개",
+        inline=True
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="invite", description="봇 초대 링크를 생성합니다.")
+async def invite_command(interaction: discord.Interaction):
+    """봇을 다른 서버에 초대할 수 있는 링크를 생성합니다."""
+    permissions = discord.Permissions(
+        send_messages=True,
+        attach_files=True,
+        embed_links=True,
+        use_slash_commands=True,
+        read_message_history=True
+    )
+
+    invite_url = discord.utils.oauth_url(
+        bot.user.id,
+        permissions=permissions,
+        scopes=['bot', 'applications.commands']
+    )
+
+    embed = discord.Embed(
+        title="🔗 봇 초대 링크",
+        description=f"[여기를 클릭하여 봇을 서버에 초대하세요]({invite_url})",
+        color=0x00aaff
+    )
+
+    embed.add_field(
+        name="⚠️ 주의사항",
+        value="봇이 정상 작동하려면 다음 권한이 필요합니다:\n"
+              "• 메시지 보내기\n"
+              "• 파일 첨부\n"
+              "• 링크 임베드\n"
+              "• 슬래시 명령어 사용\n"
+              "• 메시지 기록 보기",
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="status", description="봇 시스템의 현재 설정 상태를 확인합니다.")
 async def status_command(interaction: discord.Interaction):
     """봇의 API 키 설정 상태 및 활성화된 기능 단계를 보여줍니다."""
@@ -290,16 +418,48 @@ async def status_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-# ... (help, thresholds, run_bot 함수는 이전과 동일)
 @bot.tree.command(name="help", description="봇 사용법을 안내합니다.")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 이슈 모니터링 봇 사용법", color=0x0099ff, description="최신 기술 이슈를 모니터링하고 신뢰도 높은 정보를 제공합니다.")
-    embed.add_field(name="`/monitor`", value="`주제`와 `기간`을 입력하여 이슈를 검색하고 분석합니다.\n- `주제`: '양자 컴퓨팅'\n- `기간`: '3일' (기본값: '1주일')", inline=False)
-    embed.add_field(name="`/status`", value="봇의 현재 설정 상태와 실행 가능한 단계를 확인합니다.", inline=False)
+    """봇의 사용법과 명령어를 안내합니다."""
+    embed = discord.Embed(
+        title="🤖 이슈 모니터링 봇 사용법",
+        color=0x0099ff,
+        description="최신 기술 이슈를 모니터링하고 신뢰도 높은 정보를 제공합니다."
+    )
+
+    embed.add_field(
+        name="`/monitor`",
+        value=(
+            "`topic`(주제)와 `period`(기간)을 입력하여 이슈를 검색하고 분석합니다.\n"
+            "• `topic`: '양자 컴퓨팅', 'AI 윤리' 등\n"
+            "• `period`: '3일', '1주일', '2개월' 등 (기본값: '1주일')"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="`/status`",
+        value="봇의 현재 설정 상태와 실행 가능한 단계를 확인합니다.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="`/debug`",
+        value="봇의 상태와 등록된 명령어를 확인합니다.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="`/invite`",
+        value="봇을 다른 서버에 초대할 수 있는 링크를 생성합니다.",
+        inline=False
+    )
+
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="thresholds", description="현재 환각 탐지 임계값 설정을 확인합니다.")
 async def thresholds_command(interaction: discord.Interaction):
+    """환각 탐지 시스템의 임계값 설정을 보여줍니다."""
     tm = ThresholdManager()
     t = tm.thresholds
     embed = discord.Embed(title="⚙️ 환각 탐지 임계값 설정", color=0x00aaff)
@@ -308,11 +468,26 @@ async def thresholds_command(interaction: discord.Interaction):
     embed.add_field(name="📊 신뢰도 등급", value=f"• 매우 높음: {t.very_high_boundary:.1%} 이상\n• 높음: {t.high_boundary:.1%} 이상\n• 보통: {t.moderate_boundary:.1%} 이상", inline=True)
     await interaction.response.send_message(embed=embed)
 
+# --- 개발용 길드 동기화 함수 (선택사항) ---
+async def sync_commands_to_guild(guild_id: int):
+    """개발 중 빠른 테스트를 위해 특정 길드에만 명령어를 동기화합니다."""
+    try:
+        guild = discord.Object(id=guild_id)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        logger.success(f"✅ 길드 {guild_id}에 {len(synced)}개 명령어 동기화 완료")
+        return len(synced)
+    except Exception as e:
+        logger.error(f"❌ 길드별 동기화 실패: {e}")
+        return 0
+
 def run_bot():
+    """봇을 실행합니다."""
     discord_token = config.get_discord_token()
     if not discord_token:
         logger.critical("❌ Discord 봇 토큰이 없습니다. .env 파일을 확인해주세요!")
         return
+
     try:
         logger.info("🚀 Discord 봇을 시작합니다...")
         bot.run(discord_token, log_handler=None)

@@ -40,8 +40,10 @@ class SelfConsistencyChecker(BaseHallucinationDetector):
         # Perplexity 클라이언트
         self.perplexity_client = PerplexityClient()
 
-        # 문장 임베딩 모델
-        self.sentence_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        # 🚀 전역 캐시를 통한 문장 임베딩 모델 최적화
+        from src.hallucination_detection.enhanced_searcher import GlobalModelCache
+        model_cache = GlobalModelCache()
+        self.sentence_model = model_cache.get_model('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
 
         self.is_initialized = True
         logger.info(f"자기 일관성 검사기 초기화 완료 (쿼리 수: {self.num_queries})")

@@ -16,6 +16,33 @@ from src.hallucination_detection.threshold_manager import ThresholdManager
 from src.hallucination_detection.reppl_detector import RePPLDetector
 from src.hallucination_detection.consistency_checker import SelfConsistencyChecker
 from src.hallucination_detection.models import CombinedHallucinationScore
+from sentence_transformers import SentenceTransformer
+
+
+# 🚀 Global Sentence Transformer cache for performance optimization
+class GlobalModelCache:
+    """전역 Sentence Transformer 모델 캐시"""
+    _instance = None
+    _models = {}
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def get_model(self, model_name: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2') -> SentenceTransformer:
+        """캐시된 모델 반환 또는 새로 로드"""
+        if model_name not in self._models:
+            logger.info(f"Sentence Transformer 모델 로딩: {model_name}")
+            self._models[model_name] = SentenceTransformer(model_name)
+        else:
+            logger.debug(f"캐시된 모델 사용: {model_name}")
+        return self._models[model_name]
+    
+    def clear_cache(self):
+        """모델 캐시 초기화"""
+        self._models.clear()
+        logger.info("Sentence Transformer 모델 캐시 초기화")
 
 
 @dataclass
@@ -29,6 +56,11 @@ class OptimizationMetrics:
     self_consistency_runs: int = 0
     self_consistency_skips: int = 0
     timeout_utilizations: List[float] = field(default_factory=list)
+    # Progressive Deepening 지표
+    progressive_deepening_triggered: int = 0
+    progressive_deepening_successful: int = 0
+    progressive_deepening_failed: int = 0
+    initial_low_confidence_issues: int = 0
     
     def calculate_cache_hit_ratio(self) -> float:
         total = self.cache_hits + self.cache_misses
@@ -151,10 +183,21 @@ class EnhancedIssueSearcher:
         
         # 적응형 타임아웃 설정
         self.timeout_config = {
-            'base_timeout': 20.0,
-            'max_timeout': 45.0,
+            'base_timeout': 60.0,
+            'max_timeout': 300.0,
             'chars_per_second_ratio': 500,
             'additional_per_500chars': 5.0
+        }
+        
+        # 🆕 Progressive Deepening 설정
+        self.progressive_deepening_config = {
+            'enable': True,                    # Progressive Deepening 활성화
+            'initial_confidence_threshold': 0.5,  # 1차 분석 신뢰도 임계값
+            'deepening_confidence_threshold': 0.7, # 2차 분석 목표 신뢰도
+            'timeout_multiplier': 1.5,         # 2차 분석 타임아웃 배수
+            'max_deepening_attempts': 1,       # 최대 심화 분석 시도 횟수
+            'enhanced_query_count': 5,         # 심화 분석시 Self-Consistency 쿼리 수
+            'enhanced_similarity_threshold': 0.85,  # 심화 분석시 유사도 임계값
         }
 
         # 환각 탐지기들 초기화
@@ -178,25 +221,18 @@ class EnhancedIssueSearcher:
         )
 
     def _calculate_adaptive_timeout(self, text: str) -> float:
-        """
-        🚀 개선사항 1: 텍스트 길이에 따른 적응형 타임아웃 계산
-        """
         text_length = len(text)
-        base = self.timeout_config['base_timeout']
-        max_timeout = self.timeout_config['max_timeout']
-        
-        # 텍스트 길이별 추가 시간 계산
+        base = 60.0  # 기본 타임아웃
+        max_timeout = 300.0  # 최대 타임아웃
+
+        # 텍스트 복잡도에 따른 추가 시간 계산
         additional = min(
             max_timeout - base,
-            (text_length / self.timeout_config['chars_per_second_ratio']) * 
-            self.timeout_config['additional_per_500chars']
+            (text_length / 500) * 5.0  # 500자당 5초
         )
-        
-        calculated_timeout = base + additional
-        self.metrics.timeout_utilizations.append(calculated_timeout)
-        
-        logger.debug(f"적응형 타임아웃: {text_length}자 → {calculated_timeout:.1f}초")
-        return calculated_timeout
+
+        return base + additional
+
 
     def _should_run_self_consistency(self, priority_confidence: float) -> bool:
         """
@@ -326,28 +362,51 @@ class EnhancedIssueSearcher:
             async with semaphore:
                 return await self._validate_single_issue_with_cache(issue, keyword_result)
 
-        # 🚀 메모리 효율적 배치 처리
-        batch_size = self.max_concurrent_issues * 2
+        # 🚀 스트리밍 검증: 메모리 효율적이고 빠른 처리
         all_validated = []
         
-        for i in range(0, len(issues), batch_size):
-            batch = issues[i:i + batch_size]
-            logger.debug(f"배치 처리: {i+1}-{min(i+batch_size, len(issues))}/{len(issues)}")
+        # 스트리밍 방식으로 이슈를 처리 (큰 배치 대신 연속적 처리)
+        async def stream_process_issues():
+            """스트리밍 방식으로 이슈를 연속적으로 처리"""
+            results = []
+            active_tasks = []
             
-            # 배치별 병렬 처리
-            batch_tasks = [validate_with_optimizations(issue) for issue in batch]
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            for i, issue in enumerate(issues):
+                # 동시 실행 수 제한
+                if len(active_tasks) >= self.max_concurrent_issues:
+                    # 완료된 태스크 수집
+                    done, active_tasks = await asyncio.wait(
+                        active_tasks, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    for task in done:
+                        try:
+                            result = await task
+                            if result is not None:
+                                results.append(result)
+                        except Exception as e:
+                            logger.error(f"스트리밍 검증 실패: {e}")
+                
+                # 새로운 태스크 추가
+                task = asyncio.create_task(validate_with_optimizations(issue))
+                active_tasks.append(task)
+                
+                # 진행률 로깅
+                if (i + 1) % 10 == 0:
+                    logger.debug(f"스트리밍 처리 진행: {i+1}/{len(issues)}")
             
-            # 성공한 결과만 수집
-            for j, result in enumerate(batch_results):
-                if isinstance(result, Exception):
-                    logger.error(f"이슈 {i+j+1} 검증 실패: {result}")
-                elif result is not None:
-                    all_validated.append(result)
+            # 남은 태스크 완료 대기
+            if active_tasks:
+                remaining_results = await asyncio.gather(*active_tasks, return_exceptions=True)
+                for result in remaining_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"최종 스트리밍 검증 실패: {result}")
+                    elif result is not None:
+                        results.append(result)
             
-            # 배치 간 짧은 휴식 (메모리 정리)
-            if i + batch_size < len(issues):
-                await asyncio.sleep(0.1)
+            return results
+        
+        all_validated = await stream_process_issues()
 
         # 성능 지표 업데이트
         processing_time = time.time() - start_time
@@ -410,7 +469,7 @@ class EnhancedIssueSearcher:
         keyword_result: KeywordResult
     ) -> Optional[IssueItem]:
         """
-        🚀 단일 이슈 완전 최적화 검증
+        🚀 단일 이슈 완전 최적화 검증 (Progressive Deepening 포함)
         """
         topic = keyword_result.topic
         
@@ -421,34 +480,346 @@ class EnhancedIssueSearcher:
             # 🚀 개선사항 1: 적응형 타임아웃 계산
             adaptive_timeout = self._calculate_adaptive_timeout(analysis_text)
             
-            # === 1단계: 우선순위 탐지기 실행 ===
-            priority_scores = await self._run_priority_detectors_optimized(
-                issue, topic, analysis_text, adaptive_timeout * 0.7
+            # === 1차 분석: 빠른 초기 분석 ===
+            initial_result = await self._run_initial_analysis(
+                issue, topic, analysis_text, adaptive_timeout
             )
             
-            # === 2단계: Self-Consistency 조건부 실행 ===
-            all_scores = priority_scores.copy()
+            if initial_result is None:
+                return None
             
-            if priority_scores:
-                avg_priority_confidence = sum(
-                    score.confidence for score in priority_scores.values()
-                ) / len(priority_scores)
+            # 초기 분석 신뢰도 확인
+            initial_confidence = getattr(initial_result, 'hallucination_confidence', 0.0)
+            
+            # === 🚀 스마트 Progressive Deepening 결정 ===
+            should_deepen = self._should_apply_progressive_deepening(
+                issue, initial_confidence, analysis_text
+            )
+            
+            if should_deepen:
+                logger.info(
+                    f"Progressive Deepening 트리거 - 초기 신뢰도: {initial_confidence:.2f} < "
+                    f"{self.progressive_deepening_config['initial_confidence_threshold']:.2f} "
+                    f"(이슈: {issue.title[:30]})"
+                )
                 
-                # 🚀 개선사항 2 & 3: 조건부 Self-Consistency
-                if self._should_run_self_consistency(avg_priority_confidence):
-                    consistency_score = await self._run_optimized_self_consistency(
-                        analysis_text, issue.title, adaptive_timeout * 0.3
-                    )
+                self.metrics.progressive_deepening_triggered += 1
+                self.metrics.initial_low_confidence_issues += 1
+                
+                # === 2차 분석: 심화 정밀 분석 ===
+                deepened_result = await self._run_progressive_deepening_analysis(
+                    issue, topic, analysis_text, adaptive_timeout, initial_result
+                )
+                
+                if deepened_result is not None:
+                    deepened_confidence = getattr(deepened_result, 'hallucination_confidence', 0.0)
                     
-                    if consistency_score:
-                        all_scores['Self-Consistency'] = consistency_score
+                    if deepened_confidence >= self.progressive_deepening_config['deepening_confidence_threshold']:
+                        self.metrics.progressive_deepening_successful += 1
+                        logger.info(
+                            f"Progressive Deepening 성공 - 향상된 신뢰도: "
+                            f"{initial_confidence:.2f} → {deepened_confidence:.2f}"
+                        )
+                        return deepened_result
+                    else:
+                        self.metrics.progressive_deepening_failed += 1
+                        logger.debug(
+                            f"Progressive Deepening 실패 - 여전히 낮은 신뢰도: {deepened_confidence:.2f}"
+                        )
+                else:
+                    self.metrics.progressive_deepening_failed += 1
+                    logger.debug("Progressive Deepening 실패 - 분석 오류")
             
-            # === 3단계: 결과 통합 및 최종 검증 ===
-            return self._finalize_issue_validation(issue, all_scores)
+            # 초기 결과 반환 (Progressive Deepening이 비활성화되거나 실패한 경우)
+            return initial_result
             
         except Exception as e:
             logger.error(f"이슈 '{issue.title}' 검증 오류: {e}")
             return None
+
+    async def _run_initial_analysis(
+        self,
+        issue: IssueItem,
+        topic: str,
+        analysis_text: str,
+        adaptive_timeout: float
+    ) -> Optional[IssueItem]:
+        """
+        🚀 1차 분석: 빠른 초기 분석 수행
+        """
+        # === 1단계: 우선순위 탐지기 실행 ===
+        priority_scores = await self._run_priority_detectors_optimized(
+            issue, topic, analysis_text, adaptive_timeout * 0.7
+        )
+        
+        # === 2단계: Self-Consistency 조건부 실행 ===
+        all_scores = priority_scores.copy()
+        
+        if priority_scores:
+            avg_priority_confidence = sum(
+                score.confidence for score in priority_scores.values()
+            ) / len(priority_scores)
+            
+            # 🚀 개선사항 2 & 3: 조건부 Self-Consistency
+            if self._should_run_self_consistency(avg_priority_confidence):
+                consistency_score = await self._run_optimized_self_consistency(
+                    analysis_text, issue.title, adaptive_timeout * 0.3
+                )
+                
+                # Handle new return format
+                if consistency_score and consistency_score.get('status') != 'timeout' and consistency_score.get('status') != 'error':
+                    all_scores['Self-Consistency'] = consistency_score
+                elif consistency_score:
+                    logger.debug(f"Self-Consistency 결과: {consistency_score.get('status', 'unknown')}")
+        
+        # === 3단계: 결과 통합 및 최종 검증 ===
+        return self._finalize_issue_validation(issue, all_scores)
+
+    async def _run_progressive_deepening_analysis(
+        self,
+        issue: IssueItem,
+        topic: str,
+        analysis_text: str,
+        adaptive_timeout: float,
+        initial_result: IssueItem
+    ) -> Optional[IssueItem]:
+        """
+        🆕 2차 분석: Progressive Deepening 심화 정밀 분석
+        
+        더 긴 타임아웃과 향상된 설정으로 재분석을 수행합니다.
+        """
+        logger.debug(f"Progressive Deepening 시작: {issue.title[:30]}")
+        
+        # 심화 분석용 연장된 타임아웃
+        deepening_timeout = adaptive_timeout * self.progressive_deepening_config['timeout_multiplier']
+        
+        try:
+            # === 심화 단계 1: 향상된 우선순위 탐지기 실행 ===
+            enhanced_priority_scores = await self._run_enhanced_priority_detectors(
+                issue, topic, analysis_text, deepening_timeout * 0.6
+            )
+            
+            # === 심화 단계 2: 강화된 Self-Consistency 실행 ===
+            all_enhanced_scores = enhanced_priority_scores.copy()
+            
+            if enhanced_priority_scores:
+                # 강화된 Self-Consistency 무조건 실행
+                enhanced_consistency_score = await self._run_enhanced_self_consistency(
+                    analysis_text, issue.title, deepening_timeout * 0.4
+                )
+                
+                if enhanced_consistency_score and enhanced_consistency_score.get('status') != 'timeout' and enhanced_consistency_score.get('status') != 'error':
+                    all_enhanced_scores['Enhanced-Self-Consistency'] = enhanced_consistency_score
+                elif enhanced_consistency_score:
+                    logger.debug(f"Enhanced Self-Consistency 결과: {enhanced_consistency_score.get('status', 'unknown')}")
+            
+            # === 심화 단계 3: 결과 통합 및 검증 ===
+            if all_enhanced_scores:
+                # 초기 결과와 심화 결과를 결합하여 더 정확한 신뢰도 계산
+                initial_scores = getattr(initial_result, 'hallucination_analysis', None)
+                if initial_scores and hasattr(initial_scores, 'individual_scores'):
+                    # 기존 점수와 새로운 점수를 결합
+                    combined_scores = initial_scores.individual_scores.copy()
+                    combined_scores.update(all_enhanced_scores)
+                    all_enhanced_scores = combined_scores
+                
+                return self._finalize_issue_validation(issue, all_enhanced_scores)
+            else:
+                logger.warning(f"Progressive Deepening 실패: 모든 심화 탐지기 실패 - {issue.title[:30]}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Progressive Deepening 오류: {e} - {issue.title[:30]}")
+            return None
+
+    async def _run_enhanced_priority_detectors(
+        self,
+        issue: IssueItem,
+        topic: str,
+        analysis_text: str,
+        timeout: float
+    ) -> Dict[str, Any]:
+        """
+        🆕 향상된 우선순위 탐지기 실행 (Progressive Deepening용)
+        
+        더 긴 타임아웃과 더 정밀한 설정으로 우선순위 탐지기들을 실행합니다.
+        """
+        enhanced_tasks = {}
+        
+        # Enhanced RePPL 분석 (더 정밀한 설정)
+        if 'RePPL' in self.detectors:
+            enhanced_tasks['Enhanced-RePPL'] = asyncio.create_task(
+                self.detectors['RePPL'].analyze_issue(issue, topic),
+                name=f"EnhancedRePPL-{issue.title[:20]}"
+            )
+        
+        # Enhanced LLM Judge 검사 (더 상세한 컨텍스트)
+        if 'LLM-Judge' in self.detectors:
+            enhanced_context = (
+                f"주제: {topic}\n"
+                f"제목: {issue.title}\n"
+                f"심화 분석 모드: Progressive Deepening\n"
+                f"분석 길이: {len(analysis_text)} 문자"
+            )
+            enhanced_tasks['Enhanced-LLM-Judge'] = asyncio.create_task(
+                self.detectors['LLM-Judge'].analyze_text(
+                    analysis_text,
+                    context=enhanced_context
+                ),
+                name=f"EnhancedLLMJudge-{issue.title[:20]}"
+            )
+        
+        # 향상된 탐지기 병렬 실행 (더 긴 타임아웃)
+        enhanced_scores = {}
+        
+        if enhanced_tasks:
+            done, pending = await asyncio.wait(
+                enhanced_tasks.values(),
+                return_when=asyncio.ALL_COMPLETED,
+                timeout=timeout
+            )
+            
+            # 완료된 태스크 결과 수집
+            for task in done:
+                task_name = task.get_name()
+                try:
+                    result = await task
+                    detector_type = task_name.split('-')[1] if '-' in task_name else task_name
+                    if detector_type == 'LLMJudge':
+                        detector_type = 'LLM-Judge'
+                    
+                    enhanced_scores[f"Enhanced-{detector_type}"] = result
+                    logger.debug(f"Enhanced {detector_type} 완료: {result.confidence:.2f}")
+                    
+                except Exception as e:
+                    detector_type = task_name.split('-')[1] if '-' in task_name else task_name
+                    logger.warning(f"Enhanced {detector_type} 실패: {e}")
+            
+            # 미완료 태스크 정리
+            for task in pending:
+                task.cancel()
+                detector_type = task.get_name().split('-')[1] if '-' in task.get_name() else task.get_name()
+                logger.warning(f"Enhanced {detector_type} 타임아웃")
+                
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        
+        return enhanced_scores
+
+    async def _run_enhanced_self_consistency(
+        self,
+        text: str,
+        context: str,
+        timeout: float
+    ) -> Dict[str, Any]:
+        """
+        🆕 강화된 Self-Consistency 실행 (Progressive Deepening용)
+        
+        더 많은 쿼리와 더 엄격한 기준으로 Self-Consistency를 실행합니다.
+        """
+        if 'Self-Consistency' not in self.detectors:
+            return {'status': 'detector_unavailable', 'confidence': 0.0}
+        
+        detector = self.detectors['Self-Consistency']
+        
+        # 🆕 심화 분석용 강화된 설정 적용
+        original_settings = self._apply_enhanced_consistency_settings(detector)
+        
+        try:
+            # Enhanced Self-Consistency 실행
+            enhanced_task = asyncio.create_task(
+                detector.analyze_text(text, context=f"Enhanced Analysis: {context}")
+            )
+            
+            result = await asyncio.wait_for(enhanced_task, timeout=timeout)
+            logger.debug(f"Enhanced Self-Consistency 성공: {result.confidence:.2f}")
+            return result
+            
+        except asyncio.TimeoutError:
+            enhanced_task.cancel()
+            
+            text_preview = text[:50] + "..." if len(text) > 50 else text
+            logger.warning(
+                f"Enhanced Self-Consistency 타임아웃 - 설정 타임아웃: {timeout}초, "
+                f"분석 텍스트: '{text_preview}'"
+            )
+            
+            try:
+                await enhanced_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            
+            return {'status': 'timeout', 'confidence': 0.0}
+        except Exception as e:
+            logger.warning(f"Enhanced Self-Consistency 실패: {e}")
+            return {'status': 'error', 'confidence': 0.0, 'error': str(e)}
+        finally:
+            # 원래 설정 복원
+            self._restore_consistency_settings(detector, original_settings)
+
+    def _should_apply_progressive_deepening(
+        self, 
+        issue: IssueItem, 
+        initial_confidence: float, 
+        analysis_text: str
+    ) -> bool:
+        """
+        🚀 스마트 Progressive Deepening 결정 로직
+        
+        단순히 신뢰도만 보는 것이 아니라 다양한 요소를 고려하여
+        Progressive Deepening이 실제로 도움이 될지 판단합니다.
+        """
+        
+        # 기본 조건: Progressive Deepening이 활성화되어야 함
+        if not self.progressive_deepening_config['enable']:
+            return False
+        
+        # 🚀 조건 1: 초기 신뢰도가 임계값보다 낮아야 함
+        confidence_threshold = self.progressive_deepening_config['initial_confidence_threshold']
+        if initial_confidence >= confidence_threshold:
+            return False
+        
+        # 🚀 조건 2: 너무 짧은 텍스트는 스킵 (개선 여지가 적음)
+        if len(analysis_text) < 150:
+            logger.debug(f"Progressive Deepening 스킵 - 텍스트 너무 짧음: {len(analysis_text)} < 150")
+            return False
+        
+        # 🚀 조건 3: 명백히 문제가 있는 이슈는 스킵 (시간 절약)
+        if initial_confidence < 0.2:
+            logger.debug(f"Progressive Deepening 스킵 - 명백히 신뢰도 낮음: {initial_confidence:.2f} < 0.2")
+            return False
+        
+        # 🚀 조건 4: 중간 신뢰도 영역에서만 Progressive Deepening 적용
+        # (0.2 ~ 0.5 범위에서 가장 효과적)
+        if 0.2 <= initial_confidence < confidence_threshold:
+            logger.debug(f"Progressive Deepening 적용 - 개선 가능 범위: {initial_confidence:.2f}")
+            return True
+        
+        return False
+
+    def _apply_enhanced_consistency_settings(self, detector) -> Dict[str, Any]:
+        """
+        🆕 Progressive Deepening용 강화된 Self-Consistency 설정 적용
+        """
+        original_settings = {}
+        
+        # 🆕 쿼리 수 증가 (기본 3개 → 5개)
+        if hasattr(detector, 'set_query_count'):
+            original_settings['query_count'] = getattr(detector, 'query_count', 3)
+            detector.set_query_count(
+                self.progressive_deepening_config['enhanced_query_count']
+            )
+        
+        # 🆕 더 엄격한 유사도 기준 (기본 0.8 → 0.85)
+        if hasattr(detector, 'set_similarity_threshold'):
+            original_settings['similarity_threshold'] = getattr(detector, 'similarity_threshold', 0.8)
+            detector.set_similarity_threshold(
+                self.progressive_deepening_config['enhanced_similarity_threshold']
+            )
+        
+        return original_settings
 
     def _prepare_analysis_text(self, issue: IssueItem) -> str:
         """분석용 텍스트 최적화된 준비"""
@@ -539,12 +910,12 @@ class EnhancedIssueSearcher:
         text: str, 
         context: str, 
         timeout: float
-    ) -> Optional[Any]:
+    ) -> Dict[str, Any]:
         """
         🚀 개선사항 3: 최적화된 Self-Consistency 실행
         """
         if 'Self-Consistency' not in self.detectors:
-            return None
+            return {'status': 'detector_unavailable', 'confidence': 0.0}
         
         detector = self.detectors['Self-Consistency']
         
@@ -567,7 +938,13 @@ class EnhancedIssueSearcher:
             
         except asyncio.TimeoutError:
             consistency_task.cancel()
-            logger.warning("Self-Consistency 타임아웃")
+            
+            # Enhanced logging with timeout and text preview
+            text_preview = text[:50] + "..." if len(text) > 50 else text
+            logger.warning(
+                f"Self-Consistency 타임아웃 - 설정 타임아웃: {timeout}초, "
+                f"분석 텍스트: '{text_preview}'"
+            )
             
             # 정리 대기
             try:
@@ -575,10 +952,10 @@ class EnhancedIssueSearcher:
             except (asyncio.CancelledError, Exception):
                 pass
             
-            return None
+            return {'status': 'timeout', 'confidence': 0.0}
         except Exception as e:
             logger.warning(f"Self-Consistency 실패: {e}")
-            return None
+            return {'status': 'error', 'confidence': 0.0, 'error': str(e)}
         finally:
             # 원래 설정 복원
             self._restore_consistency_settings(detector, original_settings)
@@ -671,27 +1048,49 @@ class EnhancedIssueSearcher:
         self.metrics.cache_hits = cache_stats['hits']
         self.metrics.cache_misses = cache_stats['misses']
         
-        # 검색 결과에 성능 지표 추가
+        # 검색 결과에 성능 지표 추가 (Progressive Deepening 포함)
         search_result.performance_metrics = {
             'total_processing_time': self.metrics.total_processing_time,
             'avg_issue_time': self.metrics.avg_issue_time,
             'cache_hit_ratio': self.metrics.calculate_cache_hit_ratio(),
             'self_consistency_skip_ratio': self.metrics.calculate_self_consistency_skip_ratio(),
-            'avg_timeout_used': sum(self.metrics.timeout_utilizations) / len(self.metrics.timeout_utilizations) if self.metrics.timeout_utilizations else 0
+            'avg_timeout_used': sum(self.metrics.timeout_utilizations) / len(self.metrics.timeout_utilizations) if self.metrics.timeout_utilizations else 0,
+            # Progressive Deepening 통계
+            'progressive_deepening': {
+                'triggered': self.metrics.progressive_deepening_triggered,
+                'successful': self.metrics.progressive_deepening_successful,
+                'failed': self.metrics.progressive_deepening_failed,
+                'success_rate': (self.metrics.progressive_deepening_successful / max(1, self.metrics.progressive_deepening_triggered)) * 100,
+                'initial_low_confidence_issues': self.metrics.initial_low_confidence_issues
+            }
         }
 
     def _log_performance_report(self):
-        """성능 리포트 출력"""
+        """성능 리포트 출력 (Progressive Deepening 포함)"""
         cache_stats = self.cache.get_stats()
         
+        # Progressive Deepening 통계 계산
+        pd_success_rate = 0.0
+        if self.metrics.progressive_deepening_triggered > 0:
+            pd_success_rate = (
+                self.metrics.progressive_deepening_successful / 
+                self.metrics.progressive_deepening_triggered
+            ) * 100
+        
         logger.info(
-            f"🎯 완전 최적화 성능 리포트:\n"
+            f"🎯 완전 최적화 성능 리포트 (Progressive Deepening 포함):\n"
             f"  • 총 처리 이슈: {self.metrics.total_issues_processed}개\n"
             f"  • 평균 이슈 처리 시간: {self.metrics.avg_issue_time:.3f}초\n"
             f"  • 캐시 히트율: {cache_stats['hit_ratio']:.1%} ({cache_stats['hits']}/{cache_stats['hits'] + cache_stats['misses']})\n"
             f"  • Self-Consistency 스킵율: {self.metrics.calculate_self_consistency_skip_ratio():.1%}\n"
             f"  • 평균 타임아웃: {sum(self.metrics.timeout_utilizations) / len(self.metrics.timeout_utilizations) if self.metrics.timeout_utilizations else 0:.1f}초\n"
-            f"  • 동시 실행 수: {self.max_concurrent_issues}개"
+            f"  • 동시 실행 수: {self.max_concurrent_issues}개\n"
+            f"  🆕 Progressive Deepening 통계:\n"
+            f"    - 낮은 신뢰도 이슈: {self.metrics.initial_low_confidence_issues}개\n"
+            f"    - Deepening 트리거: {self.metrics.progressive_deepening_triggered}개\n"
+            f"    - Deepening 성공: {self.metrics.progressive_deepening_successful}개\n"
+            f"    - Deepening 실패: {self.metrics.progressive_deepening_failed}개\n"
+            f"    - 성공률: {pd_success_rate:.1f}%"
         )
 
     # 기존 호환성 메서드들 유지

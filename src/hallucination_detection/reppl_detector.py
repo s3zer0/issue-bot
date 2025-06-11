@@ -38,7 +38,10 @@ class RePPLDetector(BaseHallucinationDetector):
 
         self.client = AsyncOpenAI(api_key=self.api_key)
         self.perplexity_model = model_name or "gpt-4o"
-        self.sentence_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        # 🚀 전역 캐시를 통한 문장 임베딩 모델 최적화
+        from src.hallucination_detection.enhanced_searcher import GlobalModelCache
+        model_cache = GlobalModelCache()
+        self.sentence_model = model_cache.get_model('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
         self.repetition_threshold = 0.3
         self.perplexity_threshold = 50
         self.is_initialized = True
