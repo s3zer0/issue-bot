@@ -13,7 +13,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src.config import Config
-from src.keyword_generator import KeywordGenerator
+from src.detection.keyword_generator import KeywordGenerator
 from src.models import KeywordResult
 
 
@@ -96,7 +96,7 @@ async def test_monitor_command_general_exception(mock_config, mock_generate_keyw
     Discord 봇 명령어 함수를 직접 import하여 테스트합니다.
     """
     # bot.py에서 monitor_command 함수를 import
-    from src.bot import monitor_command
+    from src.bot.bot import monitor_command
 
     mock_config.get_current_stage.return_value = 4
     error_message = "예상치 못한 심각한 오류"

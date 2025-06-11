@@ -18,7 +18,7 @@ from src.hallucination_detection.models import CombinedHallucinationScore
 from src.hallucination_detection.threshold_manager import (
     ThresholdManager, ConfidenceLevel
 )
-from src.pdf_report_generator import PDFReportGenerator  # 새로 추가한 PDF 생성 모듈
+from src.reporting.pdf_report_generator import PDFReportGenerator  # 새로 추가한 PDF 생성 모듈
 
 
 class EnhancedReportGenerator:

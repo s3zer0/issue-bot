@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from src.models import KeywordResult, IssueItem, SearchResult
-from src.issue_searcher import create_issue_searcher
-from src.keyword_generator import generate_keywords_for_topic
+from src.search.issue_searcher import IssueSearcher
+from src.detection.keyword_generator import generate_keywords_for_topic
 from src.hallucination_detection.threshold_manager import ThresholdManager
 from src.hallucination_detection.reppl_detector import RePPLDetector
 from src.hallucination_detection.consistency_checker import SelfConsistencyChecker
@@ -166,7 +166,7 @@ class EnhancedIssueSearcher:
         환각 탐지 기능이 강화된 이슈 검색기를 초기화합니다.
         """
         # 기본 이슈 검색기
-        self.base_searcher = create_issue_searcher(api_key)
+        self.base_searcher = IssueSearcher(api_key)
 
         # 임계값 관리자
         self.threshold_manager = threshold_manager or ThresholdManager()

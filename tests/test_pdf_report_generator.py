@@ -16,7 +16,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.pdf_report_generator import PDFReportGenerator
+from src.reporting.pdf_report_generator import PDFReportGenerator
 from src.models import SearchResult, IssueItem
 
 
@@ -214,10 +214,10 @@ class TestPDFReportGenerator:
         assert any(hasattr(elem, 'setStyle') for elem in summary_elements)  # Table 객체 확인
 
     @pytest.mark.unit
-    @patch('src.pdf_report_generator.create_pdf_report')
+    @patch('src.reporting.pdf_report_generator.create_pdf_report')
     async def test_helper_function(self, mock_create_pdf, sample_search_result):
         """헬퍼 함수 테스트"""
-        from src.pdf_report_generator import create_pdf_report
+        from src.reporting.pdf_report_generator import create_pdf_report
 
         mock_create_pdf.return_value = "reports/test.pdf"
         result = await create_pdf_report(sample_search_result, "테스트")

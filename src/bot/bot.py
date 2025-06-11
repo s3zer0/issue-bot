@@ -24,7 +24,7 @@ from src.models import KeywordResult, SearchResult
 from src.hallucination_detection.enhanced_searcher import EnhancedIssueSearcher
 from src.hallucination_detection.enhanced_reporting import EnhancedReportGenerator
 from src.hallucination_detection.threshold_manager import ThresholdManager
-from src.keyword_generator import generate_keywords_for_topic
+from src.detection.keyword_generator import generate_keywords_for_topic
 
 # --- 로깅 설정 ---
 os.makedirs("logs", exist_ok=True)

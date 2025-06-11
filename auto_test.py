@@ -12,13 +12,13 @@ import sys
 
 # --- 코어 로직 임포트 ---
 try:
-    from src.keyword_generator import generate_keywords_for_topic
-    from src.hallucination_detector import RePPLEnhancedIssueSearcher
+    from src.detection.keyword_generator import generate_keywords_for_topic
+    from src.detection.hallucination_detector import RePPLEnhancedIssueSearcher
     from src.hallucination_detection.enhanced_reporting_with_pdf import (
         EnhancedReportGenerator, generate_all_reports
     )
     from src.hallucination_detection.threshold_manager import ThresholdManager, ConfidenceLevel
-    from src.pdf_report_generator import PDFReportGenerator
+    from src.reporting.pdf_report_generator import PDFReportGenerator
     from src.config import config  # .env 파일 로드를 위해 import
     print("✅ 자동 테스트에 필요한 모듈을 성공적으로 불러왔습니다.")
 except ImportError as e:

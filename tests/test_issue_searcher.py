@@ -13,8 +13,8 @@ src_path = os.path.join(project_root, 'src')
 sys.path.insert(0, src_path)
 
 # 의존성 모듈 임포트
-from src.issue_searcher import IssueSearcher
-from src.reporting import create_detailed_report_from_search_result, format_detailed_issue_report
+from src.search.issue_searcher import IssueSearcher
+from src.reporting.reporting import create_detailed_report_from_search_result, format_detailed_issue_report
 from src.models import KeywordResult, IssueItem, SearchResult
 
 

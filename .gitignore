@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+Fonts/
 
 # Python
 __pycache__/
@@ -51,6 +52,7 @@ htmlcov/
 # IDE
 .vscode/
 .idea/
+.claude
 *.swp
 *.swo
 *~
