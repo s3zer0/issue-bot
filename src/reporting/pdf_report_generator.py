@@ -24,8 +24,6 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.utils import ImageReader
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
 from loguru import logger
 import openai
 
@@ -57,39 +55,56 @@ class PDFReportGenerator:
         logger.info("PDF 보고서 생성기 초기화 완료")
 
     def _setup_fonts(self):
-        """한글 지원을 위한 폰트 설정 (SF Pro Text 우선 사용)."""
+        """한글 지원을 위한 폰트 설정 - NotoSansKR 사용."""
         try:
-            # pdfmetrics.registerFont(UnicodeCIDFont('UniKS-UCS2-H'))
-            # macOS/Linux - 프로젝트 폴더 내 Fonts 디렉토리
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            sf_path = os.path.join(project_root, "Fonts", "NotoSansKR-VariableFont_wght.ttf")
-            if os.path.exists(sf_path):
-                logger.info("NotoSans 설정")
-                pdfmetrics.registerFont(TTFont('NotoSansKR', sf_path))
+            # Use absolute path to Fonts directory
+            font_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "Fonts",
+                "NotoSansKR-VariableFont_wght.ttf"
+            )
+            
+            if os.path.exists(font_path):
+                pdfmetrics.registerFont(TTFont('NotoSansKR', font_path))
                 self.default_font = 'NotoSansKR'
+                logger.info(f"Successfully registered NotoSansKR font from: {font_path}")
             else:
-                # 대체: 시스템에 있던 NanumGothic 또는 MalgunGothic 사용
-                # (기존 로직 유지)
-                # Windows
+                # Fallback for different OS
                 if os.name == 'nt':
+                    # Windows
                     malgun = "C:/Windows/Fonts/malgun.ttf"
                     if os.path.exists(malgun):
                         pdfmetrics.registerFont(TTFont('MalgunGothic', malgun))
                         self.default_font = 'MalgunGothic'
+                        logger.info("Using MalgunGothic font on Windows")
                     else:
                         self.default_font = 'Helvetica'
+                        logger.warning("Korean font not found on Windows, using Helvetica")
                 else:
-                    # macOS에서 SF Pro가 없을 경우 시스템 한글 폰트
+                    # macOS/Linux
                     nanum = "/Library/Fonts/NanumGothic.ttf"
                     if os.path.exists(nanum):
                         pdfmetrics.registerFont(TTFont('NanumGothic', nanum))
                         self.default_font = 'NanumGothic'
+                        logger.info("Using NanumGothic font")
                     else:
+                        # Last resort - use Helvetica (no Korean support)
                         self.default_font = 'Helvetica'
-                self.default_font = 'UniKS-UCS2-H'
+                        logger.warning("Korean font not found, using Helvetica (Korean text may not display properly)")
+                        
         except Exception as e:
-            logger.warning(f"폰트 설정 중 오류 발생 ({e}), 기본 Helvetica 사용")
+            logger.error(f"Font registration error: {e}")
             self.default_font = 'Helvetica'
+    
+    def _format_text_for_font(self, text: str) -> str:
+        """폰트 호환성에 따라 텍스트 포맷팅 조정."""
+        # NotoSansKR and other TTF fonts support bold/italic, so no need to strip tags
+        # Only strip tags if using Helvetica as fallback
+        if self.default_font == 'Helvetica':
+            # Helvetica doesn't support Korean, so we might want to warn about this
+            if any('\u3131' <= char <= '\u318e' or '\uac00' <= char <= '\ud7a3' for char in text):
+                logger.warning("Korean text detected but Korean font not available")
+        return text
 
     def _setup_custom_styles(self):
         """커스텀 스타일 정의."""
@@ -404,7 +419,7 @@ class PDFReportGenerator:
 
         # 제목
         title = Paragraph(
-            f"<b>AI 이슈 모니터링 보고서</b>",
+            self._format_text_for_font(f"<b>AI 이슈 모니터링 보고서</b>"),
             self.styles['CustomTitle']
         )
         story.append(title)
@@ -413,7 +428,7 @@ class PDFReportGenerator:
 
         # 부제목
         subtitle = Paragraph(
-            f"<b>{', '.join(search_result.query_keywords[:3])}</b>",
+            self._format_text_for_font(f"<b>{', '.join(search_result.query_keywords[:3])}</b>"),
             ParagraphStyle(
                 'Subtitle',
                 parent=self.styles['CustomTitle'],
@@ -577,7 +592,7 @@ class PDFReportGenerator:
         story = []
 
         # 이슈 제목
-        title = Paragraph(f"<b>{issue.title}</b>",
+        title = Paragraph(self._format_text_for_font(f"<b>{issue.title}</b>"),
                          ParagraphStyle('IssueTitle',
                                       parent=self.styles['CustomBody'],
                                       fontSize=12,

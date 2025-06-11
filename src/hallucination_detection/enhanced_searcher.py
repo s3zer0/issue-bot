@@ -5,7 +5,7 @@
 import asyncio
 import time
 import hashlib
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, field
 from loguru import logger
 
@@ -15,7 +15,7 @@ from src.detection.keyword_generator import generate_keywords_for_topic
 from src.hallucination_detection.threshold_manager import ThresholdManager
 from src.hallucination_detection.reppl_detector import RePPLDetector
 from src.hallucination_detection.consistency_checker import SelfConsistencyChecker
-from src.hallucination_detection.models import CombinedHallucinationScore
+from src.hallucination_detection.models import CombinedHallucinationScore, ConsistencyScore
 from sentence_transformers import SentenceTransformer
 
 
@@ -566,11 +566,15 @@ class EnhancedIssueSearcher:
                     analysis_text, issue.title, adaptive_timeout * 0.3
                 )
                 
-                # Handle new return format
-                if consistency_score and consistency_score.get('status') != 'timeout' and consistency_score.get('status') != 'error':
-                    all_scores['Self-Consistency'] = consistency_score
-                elif consistency_score:
-                    logger.debug(f"Self-Consistency 결과: {consistency_score.get('status', 'unknown')}")
+                # Handle return format (ConsistencyScore object or dict)
+                if consistency_score:
+                    if isinstance(consistency_score, dict):
+                        # Timeout or error case
+                        status = consistency_score.get('status', 'unknown')
+                        logger.debug(f"Self-Consistency 결과: {status}")
+                    else:
+                        # Success case - ConsistencyScore object
+                        all_scores['Self-Consistency'] = consistency_score
         
         # === 3단계: 결과 통합 및 최종 검증 ===
         return self._finalize_issue_validation(issue, all_scores)
@@ -608,10 +612,14 @@ class EnhancedIssueSearcher:
                     analysis_text, issue.title, deepening_timeout * 0.4
                 )
                 
-                if enhanced_consistency_score and enhanced_consistency_score.get('status') != 'timeout' and enhanced_consistency_score.get('status') != 'error':
-                    all_enhanced_scores['Enhanced-Self-Consistency'] = enhanced_consistency_score
-                elif enhanced_consistency_score:
-                    logger.debug(f"Enhanced Self-Consistency 결과: {enhanced_consistency_score.get('status', 'unknown')}")
+                if enhanced_consistency_score:
+                    if isinstance(enhanced_consistency_score, dict):
+                        # Timeout or error case
+                        status = enhanced_consistency_score.get('status', 'unknown')
+                        logger.debug(f"Enhanced Self-Consistency 결과: {status}")
+                    else:
+                        # Success case - ConsistencyScore object
+                        all_enhanced_scores['Enhanced-Self-Consistency'] = enhanced_consistency_score
             
             # === 심화 단계 3: 결과 통합 및 검증 ===
             if all_enhanced_scores:
@@ -713,11 +721,12 @@ class EnhancedIssueSearcher:
         text: str,
         context: str,
         timeout: float
-    ) -> Dict[str, Any]:
+    ) -> Optional[Union[ConsistencyScore, Dict[str, Any]]]:
         """
         🆕 강화된 Self-Consistency 실행 (Progressive Deepening용)
         
         더 많은 쿼리와 더 엄격한 기준으로 Self-Consistency를 실행합니다.
+        Returns ConsistencyScore on success, Dict on error/timeout, None on failure
         """
         if 'Self-Consistency' not in self.detectors:
             return {'status': 'detector_unavailable', 'confidence': 0.0}
@@ -910,9 +919,10 @@ class EnhancedIssueSearcher:
         text: str, 
         context: str, 
         timeout: float
-    ) -> Dict[str, Any]:
+    ) -> Optional[Union[ConsistencyScore, Dict[str, Any]]]:
         """
         🚀 개선사항 3: 최적화된 Self-Consistency 실행
+        Returns ConsistencyScore on success, Dict on error/timeout, None on failure
         """
         if 'Self-Consistency' not in self.detectors:
             return {'status': 'detector_unavailable', 'confidence': 0.0}
@@ -984,14 +994,16 @@ class EnhancedIssueSearcher:
 
     def _create_optimized_consistency_score(self):
         """최적화된 일관성 점수 생성 (짧은 텍스트용)"""
-        class OptimizedConsistencyScore:
-            def __init__(self):
-                self.confidence = 0.85
-                self.consistency_details = "짧은 텍스트 최적화 처리"
-                self.query_responses = ["최적화된 응답"]
-                self.similarity_scores = [0.9]
-        
-        return OptimizedConsistencyScore()
+        return ConsistencyScore(
+            confidence=0.85,
+            consistency_rate=0.85,
+            num_queries=1,
+            num_consistent=1,
+            variations=["최적화된 응답"],
+            common_elements=["짧은 텍스트"],
+            divergent_elements=[],
+            analysis_details={"optimized": True, "reason": "짧은 텍스트 최적화 처리"}
+        )
 
     def _finalize_issue_validation(
         self, 
