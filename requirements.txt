@@ -60,3 +60,12 @@ pytest-mock>=3.11.0
 pytest-cov>=4.1.0
 pytest-xdist>=3.3.0
 factory-boy>=3.3.0
+
+# PDF 생성
+reportlab==4.0.7  # PDF 문서 생성을 위한 핵심 라이브러리
+pillow==10.1.0    # 이미지 처리 (reportlab의 이미지 삽입 기능에 필요)
+
+# 추가 권장 패키지 (선택사항)
+# weasyprint==60.1  # HTML to PDF 변환 (대안 방법)
+# pdfkit==1.0.0     # wkhtmltopdf 래퍼 (고급 PDF 생성)
+# matplotlib==3.8.2  # 차트 생성 (보고서에 그래프 추가 시)

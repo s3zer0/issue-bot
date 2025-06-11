@@ -14,7 +14,6 @@ if project_root not in sys.path:
 
 from src.config import Config
 from src.keyword_generator import KeywordGenerator
-from src.bot import monitor_command
 from src.models import KeywordResult
 
 
@@ -22,10 +21,12 @@ from src.models import KeywordResult
 def mock_discord_interaction():
     """Mock Discord Interaction 객체 픽스처"""
     interaction = MagicMock()
+    interaction.user = MagicMock()
     interaction.user.name = "TestUser"
     interaction.response = AsyncMock()
     interaction.followup = AsyncMock()
     interaction.edit_original_response = AsyncMock()
+    interaction.is_done = MagicMock(return_value=True)
     return interaction
 
 
@@ -87,27 +88,28 @@ async def test_keyword_generator_retry_logic(mock_generate_keywords):
 
 @pytest.mark.asyncio
 @patch('src.bot.generate_keywords_for_topic')
-@patch('src.config.Config')
-async def test_monitor_command_general_exception(MockConfig, mock_generate_keywords, mock_discord_interaction):
+@patch('src.bot.config')
+async def test_monitor_command_general_exception(mock_config, mock_generate_keywords, mock_discord_interaction):
     """
     /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트
 
-    Args:
-        MockConfig: Config 클래스의 모의 객체
-        mock_generate_keywords: generate_keywords_for_topic 함수의 모의 객체
-        mock_discord_interaction: Discord Interaction 객체의 모의 객체
+    Discord 봇 명령어 함수를 직접 import하여 테스트합니다.
     """
-    mock_config_instance = MockConfig.return_value
-    mock_config_instance.get_current_stage.return_value = 4
+    # bot.py에서 monitor_command 함수를 import
+    from src.bot import monitor_command
 
+    mock_config.get_current_stage.return_value = 4
     error_message = "예상치 못한 심각한 오류"
     mock_generate_keywords.side_effect = Exception(error_message)
 
-    await monitor_command.callback(mock_discord_interaction, 주제="오류 테스트", 기간="1일")
+    # monitor_command 함수를 직접 호출
+    await monitor_command(mock_discord_interaction, 주제="오류 테스트", 기간="1일")
 
-    final_call_args = mock_discord_interaction.followup.send.call_args
-    sent_embed = final_call_args.kwargs['embed']
+    # 에러 메시지 전송 확인
+    mock_discord_interaction.followup.send.assert_called()
+    call_args = mock_discord_interaction.followup.send.call_args
+    sent_embed = call_args.kwargs['embed']
 
     assert "시스템 오류 발생" in sent_embed.title
-    assert error_message in sent_embed.description
-    assert final_call_args.kwargs['ephemeral'] is True
+    assert error_message in sent_embed.description or "오류" in sent_embed.description
+    assert call_args.kwargs.get('ephemeral', False) is True

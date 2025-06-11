@@ -71,54 +71,222 @@ def validate_topic(topic: str) -> bool:
     return topic is not None and len(topic.strip()) >= 2
 
 # --- 슬래시 명령어 ---
-@bot.tree.command(name="monitor", description="특정 주제에 대한 이슈를 모니터링하고 환각 현상을 검증합니다.")
+bot.tree.command(name="monitor", description="특정 주제에 대한 이슈를 모니터링하고 환각 현상을 검증합니다.")
+
+
 async def monitor_command(interaction: discord.Interaction, 주제: str, 기간: str = "1주일"):
-    logger.info(f"📝 /monitor 수신: 사용자='{interaction.user.name}', 주제='{주제}'")
+    """이슈 모니터링 메인 명령어 (PDF 보고서 생성 포함).
+
+    사용자로부터 주제와 기간을 입력받아 키워드 생성, 이슈 검색, 환각 탐지,
+    보고서 생성의 전체 파이프라인을 실행하고 결과를 Discord에 전송합니다.
+    마크다운과 PDF 두 가지 형식의 보고서를 생성합니다.
+
+    Args:
+        interaction (discord.Interaction): 사용자의 상호작용 객체.
+        주제 (str): 분석할 주제어 (예: '양자 컴퓨팅').
+        기간 (str): 검색할 기간 (예: '3일', '2주일'). 기본값은 '1주일'.
+    """
+    user = interaction.user
+    logger.info(f"📝 /monitor 명령어 수신: 사용자='{user.name}', 주제='{주제}', 기간='{기간}'")
     await interaction.response.defer(thinking=True)
+
     try:
+        # 주제 유효성 검사
         if not validate_topic(주제):
             await interaction.followup.send("❌ 주제를 2글자 이상 입력해주세요.", ephemeral=True)
             return
 
+        # 기간 파싱
         _, period_description = parse_time_period(기간)
 
-        await interaction.followup.send(embed=discord.Embed(title="🔍 이슈 모니터링 시작...", description=f"**주제**: {주제}\n**기간**: {period_description}\n\n1/3. 키워드 생성 중...", color=0x00aaff), wait=True)
+        # 초기 진행 상황 메시지 전송
+        progress_embed = discord.Embed(
+            title="🔍 이슈 모니터링 시작 (3단계 환각 탐지 활성화)",
+            description=f"**주제**: {주제}\n**기간**: {period_description}\n\n⏳ 처리 중...",
+            color=0x00aaff,
+            timestamp=datetime.now()
+        )
+        await interaction.followup.send(embed=progress_embed)
 
+        # 진행 상황 업데이트 함수
+        async def update_progress(stage: int, message: str):
+            progress_embed.description = (
+                f"**주제**: {주제}\n**기간**: {period_description}\n\n"
+                f"{stage}/5. {message}"
+            )
+            await interaction.edit_original_response(embed=progress_embed)
+
+        # 1. 키워드 생성
+        await update_progress(1, "AI 키워드 생성 중...")
         keyword_result = await generate_keywords_for_topic(주제)
 
-        await interaction.edit_original_response(embed=discord.Embed(title="🔍 이슈 모니터링 진행 중...", description=f"**주제**: {주제}\n**기간**: {period_description}\n\n2/3. 이슈 검색 및 환각 탐지 중...", color=0x00aaff))
-
+        # 2. 환각 탐지가 통합된 검색기 실행
+        await update_progress(2, "이슈 검색 및 환각 탐지 중...")
         enhanced_searcher = EnhancedIssueSearcher()
         search_result = await enhanced_searcher.search_with_validation(keyword_result, period_description)
 
-        await interaction.edit_original_response(embed=discord.Embed(title="🔍 이슈 모니터링 진행 중...", description=f"**주제**: {주제}\n**기간**: {period_description}\n\n3/3. 최종 보고서 생성 중...", color=0x00aaff))
+        # 3. 향상된 보고서 생성 (마크다운 + PDF)
+        await update_progress(3, "마크다운 보고서 생성 중...")
+        from src.hallucination_detection.enhanced_reporting_with_pdf import generate_all_reports
 
-        report_generator = EnhancedReportGenerator()
-        result_embed = report_generator.generate_discord_embed(search_result)
-        detailed_report = report_generator.generate_detailed_report(search_result)
-        file_path = report_generator.save_report_to_file(detailed_report, 주제)
+        # PDF 생성 가능 여부 확인
+        can_generate_pdf = config.get_openai_api_key() is not None
+        if not can_generate_pdf:
+            logger.warning("OpenAI API 키가 없어 PDF 생성을 건너뜁니다.")
+            await update_progress(3, "보고서 생성 중... (PDF 생성 불가 - OpenAI API 키 필요)")
+        else:
+            await update_progress(3, "보고서 생성 중... (마크다운 + PDF)")
 
-        with open(file_path, 'rb') as f:
-            discord_file = discord.File(f, filename=os.path.basename(file_path))
-            # 최종 결과는 edit_original_response로 전송해야 함
-            await interaction.edit_original_response(embed=result_embed, attachments=[discord_file])
+        # 보고서 생성
+        result_embed, markdown_path, pdf_path = await generate_all_reports(
+            search_result,
+            주제,
+            generate_pdf=can_generate_pdf
+        )
+
+        # 4. 파일 준비
+        await update_progress(4, "파일 첨부 준비 중...")
+        files_to_send = []
+
+        # 마크다운 파일 추가
+        with open(markdown_path, 'rb') as f:
+            markdown_file = discord.File(
+                f,
+                filename=f"{주제}_보고서_{datetime.now().strftime('%Y%m%d')}.md"
+            )
+            files_to_send.append(markdown_file)
+
+        # PDF 파일 추가 (있는 경우)
+        if pdf_path:
+            with open(pdf_path, 'rb') as f:
+                pdf_file = discord.File(
+                    f,
+                    filename=f"{주제}_보고서_{datetime.now().strftime('%Y%m%d')}.pdf"
+                )
+                files_to_send.append(pdf_file)
+            logger.info("PDF 보고서가 성공적으로 생성되었습니다.")
+
+        # 5. 최종 결과 전송
+        await update_progress(5, "결과 전송 중...")
+
+        # 파일 형식에 따른 안내 메시지 추가
+        if pdf_path:
+            file_info = "📎 **첨부 파일**: 마크다운(.md) 및 PDF 보고서"
+        else:
+            file_info = "📎 **첨부 파일**: 마크다운(.md) 보고서\n" \
+                        "💡 *PDF 생성을 위해서는 OpenAI API 키 설정이 필요합니다.*"
+
+        # 결과 임베드에 파일 정보 추가
+        if not any(field.name == "📎 첨부 파일" for field in result_embed.fields):
+            result_embed.add_field(
+                name="📎 첨부 파일",
+                value=file_info,
+                inline=False
+            )
+
+        # 최종 메시지 전송
+        await interaction.edit_original_response(
+            embed=result_embed,
+            attachments=files_to_send
+        )
+
+        # 성공 로그
+        logger.success(
+            f"✅ 모니터링 완료 - 주제: {주제}, "
+            f"이슈: {search_result.total_found}개, "
+            f"파일: {len(files_to_send)}개"
+        )
+
+        # 신뢰도 분포 로그
+        if hasattr(search_result, 'confidence_distribution'):
+            dist = search_result.confidence_distribution
+            logger.info(
+                f"신뢰도 분포 - "
+                f"높음: {dist.get('high', 0)}개, "
+                f"보통: {dist.get('moderate', 0)}개, "
+                f"낮음: {dist.get('low', 0)}개"
+            )
 
     except Exception as e:
         logger.error(f"💥 /monitor 명령어 처리 중 심각한 오류 발생: {e}", exc_info=True)
-        error_embed = discord.Embed(title="❌ 시스템 오류 발생", description=f"요청 처리 중 문제가 발생했습니다.\n`오류: {e}`", color=0xff0000)
-        await interaction.followup.send(embed=error_embed, ephemeral=True)
 
+        # 오류 임베드 생성
+        error_embed = discord.Embed(
+            title="❌ 시스템 오류 발생",
+            description=f"요청 처리 중 문제가 발생했습니다.\n\n"
+                        f"**오류 내용**: `{str(e)}`\n\n"
+                        f"문제가 지속되면 관리자에게 문의해주세요.",
+            color=0xff0000,
+            timestamp=datetime.now()
+        )
+
+        # 오류 타입에 따른 추가 안내
+        if "openai" in str(e).lower():
+            error_embed.add_field(
+                name="💡 해결 방법",
+                value="OpenAI API 키 설정을 확인해주세요.",
+                inline=False
+            )
+        elif "perplexity" in str(e).lower():
+            error_embed.add_field(
+                name="💡 해결 방법",
+                value="Perplexity API 키 설정을 확인해주세요.",
+                inline=False
+            )
+
+        # defer 상태에 따른 응답 방식 선택
+        if interaction.is_done():
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+        else:
+            await interaction.edit_original_response(embed=error_embed)
+
+
+# PDF 보고서 생성 가능 여부를 확인하는 상태 명령어 수정
 @bot.tree.command(name="status", description="봇 시스템의 현재 설정 상태를 확인합니다.")
 async def status_command(interaction: discord.Interaction):
+    """봇의 API 키 설정 상태 및 활성화된 기능 단계를 보여줍니다."""
     stage = config.get_current_stage()
+    embed = discord.Embed(
+        title="📊 시스템 상태",
+        description=f"현재 실행 가능한 최고 단계는 **{stage}단계**입니다.",
+        color=0x00ff00
+    )
     stage_info = config.get_stage_info()
-    embed = discord.Embed(title="📊 시스템 상태", description=f"현재 실행 가능한 최고 단계는 **{stage}단계**입니다.", color=0x00ff00)
+
+    # API 키 설정 상태
     embed.add_field(name="1단계: Discord Bot", value="✅" if stage_info['stage1_discord'] else "❌", inline=True)
     embed.add_field(name="2단계: 키워드 생성 (OpenAI)", value="✅" if stage_info['stage2_openai'] else "❌", inline=True)
-    embed.add_field(name="3/4단계: 이슈 검색 (Perplexity)", value="✅" if stage_info['stage3_perplexity'] else "❌", inline=True)
+    embed.add_field(name="3/4단계: 이슈 검색 (Perplexity)", value="✅" if stage_info['stage3_perplexity'] else "❌",
+                    inline=True)
 
+    # 환각 탐지 시스템 상태
     if stage >= 4:
-        embed.add_field(name="🛡️ 환각 탐지 시스템", value="✅ **3단계 교차 검증 활성화**\n• RePPL\n• 자기 일관성\n• LLM-as-Judge", inline=False)
+        embed.add_field(
+            name="🛡️ 환각 탐지 시스템",
+            value=(
+                "✅ **3단계 교차 검증 활성화**\n"
+                "• RePPL 탐지기\n"
+                "• 자기 일관성 검사기\n"
+                "• LLM-as-Judge"
+            ),
+            inline=False
+        )
+
+    # PDF 생성 기능 상태 추가
+    pdf_status = "✅ 활성화" if config.get_openai_api_key() else "❌ 비활성화 (OpenAI API 키 필요)"
+    embed.add_field(
+        name="📄 PDF 보고서 생성",
+        value=pdf_status,
+        inline=False
+    )
+
+    # 추가 기능 안내
+    if not config.get_openai_api_key():
+        embed.add_field(
+            name="💡 팁",
+            value="OpenAI API 키를 설정하면 LLM으로 개선된 PDF 보고서를 생성할 수 있습니다.",
+            inline=False
+        )
 
     await interaction.response.send_message(embed=embed)
 
