@@ -157,7 +157,7 @@ class TestEnhancedReportingWithPDF:
                 mock_file.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('src.pdf_report_generator.PDFReportGenerator.generate_report')
+    @patch('src.reporting.pdf_report_generator.PDFReportGenerator.generate_report')
     async def test_generate_reports_with_pdf(self, mock_pdf_generate, sample_search_result):
         """PDF 포함 전체 보고서 생성 테스트"""
         from src.hallucination_detection.enhanced_reporting_with_pdf import EnhancedReportGenerator
@@ -205,7 +205,7 @@ class TestEnhancedReportingWithPDF:
 
         generator = EnhancedReportGenerator()
 
-        with patch('src.pdf_report_generator.PDFReportGenerator.generate_report',
+        with patch('src.reporting.pdf_report_generator.PDFReportGenerator.generate_report',
                    side_effect=Exception("PDF 생성 오류")):
             with patch('builtins.open', mock_open()) as mock_file:
                 with patch('os.makedirs'):

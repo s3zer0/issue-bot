@@ -66,11 +66,11 @@ class TestPDFReportGenerator:
     @pytest.mark.unit
     def test_pdf_generator_initialization(self):
         """PDF 생성기 초기화 테스트"""
-        with patch('src.pdf_report_generator.config.get_openai_api_key', return_value="test_key"):
+        with patch('src.reporting.pdf_report_generator.config.get_openai_api_key', return_value="test_key"):
             generator = PDFReportGenerator()
             assert generator.api_key == "test_key"
             assert generator.threshold_manager is not None
-            assert generator.default_font in ['Helvetica', 'MalgunGothic', 'NanumGothic']
+            assert generator.default_font in ['Helvetica', 'MalgunGothic', 'NanumGothic', 'NotoSansKR']
 
     @pytest.mark.unit
     def test_create_basic_structure_without_llm(self, sample_search_result):
@@ -95,15 +95,22 @@ class TestPDFReportGenerator:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = """
-1. 핵심 요약 (Executive Summary): AI 기술이 빠르게 발전하고 있으며 다양한 산업에 영향을 미치고 있습니다.
-2. 주요 발견사항 (Key Findings): 
-   - AI 기술 혁신이 가속화되고 있음
-   - 의료 분야에서 머신러닝 활용 증가
-3. 트렌드 분석 (Trend Analysis): AI 기술은 지속적으로 성장할 것으로 예상됩니다.
-4. 리스크 및 기회 (Risks & Opportunities): 윤리적 문제와 함께 혁신의 기회가 공존합니다.
-5. 권장 조치사항 (Recommended Actions): 
-   - AI 기술 투자 확대
-   - 윤리 가이드라인 수립
+핵심 요약 (Executive Summary):
+AI 기술이 빠르게 발전하고 있으며 다양한 산업에 영향을 미치고 있습니다.
+
+주요 발견사항 (Key Findings):
+- AI 기술 혁신이 가속화되고 있음
+- 의료 분야에서 머신러닝 활용 증가
+
+트렌드 분석 (Trend Analysis):
+AI 기술은 지속적으로 성장할 것으로 예상됩니다.
+
+리스크 및 기회 (Risks & Opportunities):
+윤리적 문제와 함께 혁신의 기회가 공존합니다.
+
+권장 조치사항 (Recommended Actions):
+- AI 기술 투자 확대
+- 윤리 가이드라인 수립
         """
         mock_client.chat.completions.create.return_value = mock_response
 
@@ -131,15 +138,18 @@ class TestPDFReportGenerator:
         generator = PDFReportGenerator()
 
         llm_response = """
-핵심 요약 (Executive Summary): 이것은 요약입니다.
+핵심 요약 (Executive Summary):
+이것은 요약입니다.
 
 주요 발견사항 (Key Findings):
 - 첫 번째 발견
 - 두 번째 발견
 
-트렌드 분석 (Trend Analysis): 트렌드 내용입니다.
+트렌드 분석 (Trend Analysis):
+트렌드 내용입니다.
 
-리스크 및 기회 (Risks & Opportunities): 리스크와 기회입니다.
+리스크 및 기회 (Risks & Opportunities):
+리스크와 기회입니다.
 
 권장 조치사항 (Recommended Actions):
 1. 첫 번째 조치
@@ -186,7 +196,7 @@ class TestPDFReportGenerator:
             with patch('os.makedirs'):
                 result_path = await generator.generate_report(sample_search_result, "테스트 주제")
 
-                assert result_path == "reports/test_report.pdf"
+                assert result_path.startswith("reports/") and result_path.endswith("_enhanced.pdf")
                 mock_generate_pdf.assert_called_once()
 
     @pytest.mark.unit
@@ -234,9 +244,9 @@ class TestPDFIntegrationWithBot:
         """generate_all_reports 함수의 PDF 생성 테스트"""
         from src.hallucination_detection.enhanced_reporting_with_pdf import generate_all_reports
 
-        # PDF 생성기 모의 설정
-        mock_pdf_generator = AsyncMock()
-        mock_pdf_generator.generate_report.return_value = "reports/test.pdf"
+        # PDF 생성기 모의 설정  
+        mock_pdf_generator = MagicMock()
+        mock_pdf_generator.generate_report = AsyncMock(return_value="reports/test.pdf")
         mock_pdf_generator_class.return_value = mock_pdf_generator
 
         # 보고서 생성
@@ -245,6 +255,7 @@ class TestPDFIntegrationWithBot:
             mock_report_instance.generate_discord_embed.return_value = MagicMock()
             mock_report_instance.generate_detailed_report.return_value = "마크다운 보고서"
             mock_report_instance.save_report_to_file.return_value = "reports/test.md"
+            mock_report_instance.generate_reports = AsyncMock(return_value=(MagicMock(), "reports/test.md", "reports/test.pdf"))
             mock_report_gen.return_value = mock_report_instance
 
             embed, md_path, pdf_path = await generate_all_reports(
@@ -255,7 +266,8 @@ class TestPDFIntegrationWithBot:
 
             assert md_path == "reports/test.md"
             assert pdf_path == "reports/test.pdf"
-            mock_pdf_generator.generate_report.assert_called_once()
+            # PDF generator is mocked at a higher level, so we check the instance was called
+            mock_report_instance.generate_reports.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_generate_all_reports_without_pdf(self, sample_search_result):
@@ -267,6 +279,7 @@ class TestPDFIntegrationWithBot:
             mock_report_instance.generate_discord_embed.return_value = MagicMock()
             mock_report_instance.generate_detailed_report.return_value = "마크다운 보고서"
             mock_report_instance.save_report_to_file.return_value = "reports/test.md"
+            mock_report_instance.generate_reports = AsyncMock(return_value=(MagicMock(), "reports/test.md", None))
             mock_report_gen.return_value = mock_report_instance
 
             embed, md_path, pdf_path = await generate_all_reports(

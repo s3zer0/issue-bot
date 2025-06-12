@@ -35,7 +35,7 @@ class TestIssueSearcher:
     """IssueSearcher 테스트 클래스"""
 
     @pytest.mark.unit
-    @patch('src.issue_searcher.PerplexityClient')
+    @patch('src.search.issue_searcher.PerplexityClient')
     def test_parse_issue_section(self, mock_client):
         """새로운 API 형식에 맞는 섹션 파싱 테스트"""
         searcher = IssueSearcher(api_key="test_key")
@@ -48,7 +48,7 @@ class TestIssueSearcher:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    @patch('src.issue_searcher.PerplexityClient')
+    @patch('src.search.issue_searcher.PerplexityClient')
     async def test_search_issues_with_details(self, mock_client_class, sample_keyword_result):
         """ 세부 정보 포함 이슈 검색 통합 테스트"""
         mock_client = AsyncMock()
@@ -189,7 +189,7 @@ class TestIssueSearcherImproved:
         assert searcher._parse_date(None) is None
 
     @pytest.mark.unit
-    @patch('src.issue_searcher.PerplexityClient')
+    @patch('src.search.issue_searcher.PerplexityClient')
     def test_parse_issue_section_improved(self, mock_client):
         """개선된 API 응답 파싱 테스트"""
         searcher = IssueSearcher(api_key="test_key")

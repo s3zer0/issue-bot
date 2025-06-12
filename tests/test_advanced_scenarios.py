@@ -53,7 +53,7 @@ def test_config_fallback_on_invalid_env_vars(mock_load_dotenv):
 # --- 2. keyword_generator.py 테스트 ---
 
 @pytest.mark.asyncio
-@patch('src.keyword_generator._generate_keywords', new_callable=AsyncMock)
+@patch('src.detection.keyword_generator.generate_keywords_for_topic', new_callable=AsyncMock)
 async def test_keyword_generator_retry_logic(mock_generate_keywords):
     """
     레거시 래퍼가 새 시스템을 올바르게 호출하는지 테스트
@@ -78,7 +78,7 @@ async def test_keyword_generator_retry_logic(mock_generate_keywords):
     generator = KeywordGenerator(api_key="fake_key")
     result = await generator.generate_keywords("테스트")
 
-    # 검증
+    # 검증 - generate_keywords_for_topic이 호출되었는지 확인
     mock_generate_keywords.assert_awaited_once_with("테스트", None)
     assert "성공" in result.primary_keywords
     assert isinstance(result, KeywordResult)
@@ -87,8 +87,8 @@ async def test_keyword_generator_retry_logic(mock_generate_keywords):
 # --- 3. bot.py 테스트 ---
 
 @pytest.mark.asyncio
-@patch('src.bot.generate_keywords_for_topic')
-@patch('src.bot.config')
+@patch('src.bot.bot.generate_keywords_for_topic')
+@patch('src.bot.bot.config')
 async def test_monitor_command_general_exception(mock_config, mock_generate_keywords, mock_discord_interaction):
     """
     /monitor 명령어 실행 중 예상치 못한 예외 처리 테스트
@@ -102,8 +102,8 @@ async def test_monitor_command_general_exception(mock_config, mock_generate_keyw
     error_message = "예상치 못한 심각한 오류"
     mock_generate_keywords.side_effect = Exception(error_message)
 
-    # monitor_command 함수를 직접 호출
-    await monitor_command(mock_discord_interaction, 주제="오류 테스트", 기간="1일")
+    # monitor_command 함수를 직접 호출 (slash command의 callback function)
+    await monitor_command.callback(mock_discord_interaction, 주제="오류 테스트", 기간="1일")
 
     # 에러 메시지 전송 확인
     mock_discord_interaction.followup.send.assert_called()
