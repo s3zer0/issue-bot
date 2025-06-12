@@ -7,8 +7,10 @@ Perplexity AI API와의 통신을 전담하는 클라이언트 모듈.
 
 import asyncio
 import httpx
+import time
 from typing import Dict, Any, List, Optional
 from loguru import logger
+from functools import lru_cache
 from src.config import config  # 환경 설정 관리 모듈
 
 
@@ -43,13 +45,26 @@ class PerplexityClient:
         self.model = "sonar-pro"  # 사용할 LLM 모델
         self.timeout = 60  # HTTP 요청 타임아웃 (초) - 최적화: 300초 → 60초
         self.max_retries = 3  # 최대 재시도 횟수
+        
+        # Performance: Request rate limiting and connection pooling
+        self._request_semaphore = asyncio.Semaphore(5)  # Limit concurrent requests
+        self._last_request_time = 0
+        self._min_request_interval = 0.1  # 100ms between requests
+        
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",  # 인증 헤더
             "Content-Type": "application/json"  # 요청 본문 형식
         }
+        
+        # Performance: Optimized connection pool for better throughput
         self._client = httpx.AsyncClient(
             headers=self.headers,
-            timeout=self.timeout
+            timeout=self.timeout,
+            limits=httpx.Limits(
+                max_keepalive_connections=10,  # Increased keepalive
+                max_connections=20,            # Increased total connections
+                keepalive_expiry=30           # Keep connections alive longer
+            )
         )
         logger.info(f"PerplexityClient 초기화 완료 (모델: {self.model})")
 
@@ -168,7 +183,62 @@ class PerplexityClient:
         # 공통 API 호출 메서드 실행
         return await self._make_api_call(prompt)
 
+    async def batch_api_calls(self, prompts: List[str], batch_size: int = 5) -> List[Dict[str, Any]]:
+        """
+        Performance: Process multiple prompts in parallel batches with rate limiting.
+        
+        Args:
+            prompts: List of prompts to process
+            batch_size: Maximum concurrent requests (default: 5)
+            
+        Returns:
+            List of API responses corresponding to input prompts
+        """
+        async def rate_limited_call(prompt: str) -> Dict[str, Any]:
+            """Single API call with rate limiting."""
+            async with self._request_semaphore:
+                # Rate limiting: ensure minimum interval between requests
+                current_time = time.time()
+                time_since_last = current_time - self._last_request_time
+                if time_since_last < self._min_request_interval:
+                    await asyncio.sleep(self._min_request_interval - time_since_last)
+                
+                self._last_request_time = time.time()
+                return await self._make_api_call(prompt)
+        
+        # Process in batches to avoid overwhelming the API
+        results = []
+        for i in range(0, len(prompts), batch_size):
+            batch = prompts[i:i + batch_size]
+            batch_tasks = [rate_limited_call(prompt) for prompt in batch]
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            results.extend(batch_results)
+            
+            # Small delay between batches for API health
+            if i + batch_size < len(prompts):
+                await asyncio.sleep(0.5)
+        
+        return results
+    
+    @lru_cache(maxsize=100)
+    def _get_cached_prompt_template(self, prompt_type: str) -> str:
+        """Performance: Cache frequently used prompt templates."""
+        templates = {
+            "search": "주제 '{topic}'와 관련하여 {time_period} 동안 웹에서 가장 중요한 이슈들을 찾아주세요.",
+            "detail": "'{title}'에 대한 상세 정보를 제공해주세요.",
+            "keywords": "'{topic}'와 관련된 핵심 키워드들을 추출해주세요."
+        }
+        return templates.get(prompt_type, "")
+
     async def close(self):
         """애플리케이션 종료 시 클라이언트를 안전하게 닫습니다."""
         await self._client.aclose()
         logger.info("PerplexityClient가 안전하게 종료되었습니다.")
+    
+    async def __aenter__(self):
+        """Performance: Context manager support for connection reuse."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Performance: Ensure proper cleanup."""
+        await self.close()

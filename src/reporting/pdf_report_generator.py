@@ -30,6 +30,8 @@ import openai
 from src.models import SearchResult, IssueItem
 from src.config import config
 from src.hallucination_detection.threshold_manager import ThresholdManager
+from src.reporting.markdown_parser import MarkdownToPDFConverter
+from src.reporting.topic_classifier import TopicClassifier
 
 
 class PDFReportGenerator:
@@ -47,6 +49,12 @@ class PDFReportGenerator:
 
         # 한글 폰트 설정 (NanumGothic 또는 시스템 폰트 사용)
         self._setup_fonts()
+
+        # Performance: Initialize markdown converter for better text formatting
+        self.markdown_converter = MarkdownToPDFConverter(self.default_font)
+        
+        # Dynamic: Initialize topic classifier for adaptive sections
+        self.topic_classifier = TopicClassifier()
 
         # 스타일 설정
         self.styles = getSampleStyleSheet()
@@ -385,20 +393,8 @@ class PDFReportGenerator:
         story.extend(self._create_executive_summary(enhanced_data))
         story.append(PageBreak())
 
-        # 주요 발견사항
-        story.extend(self._create_key_findings(enhanced_data))
-
-        # 상세 이슈 분석
-        story.extend(self._create_detailed_issues(enhanced_data))
-
-        # 트렌드 분석
-        story.extend(self._create_trend_analysis(enhanced_data))
-
-        # 리스크 및 기회
-        story.extend(self._create_risks_opportunities(enhanced_data))
-
-        # 권장 조치사항
-        story.extend(self._create_recommendations(enhanced_data))
+        # Dynamic: Generate sections based on topic classification
+        story.extend(self._create_dynamic_sections(enhanced_data))
 
         # 부록
         story.extend(self._create_appendix(enhanced_data))
@@ -588,74 +584,224 @@ class PDFReportGenerator:
         return story
 
     def _create_issue_detail(self, issue: IssueItem) -> List:
-        """개별 이슈 상세 정보 생성."""
+        """개별 이슈 상세 정보 생성 (Enhanced with markdown parsing)."""
         story = []
 
-        # 이슈 제목
-        title = Paragraph(self._format_text_for_font(f"<b>{issue.title}</b>"),
-                         ParagraphStyle('IssueTitle',
-                                      parent=self.styles['CustomBody'],
-                                      fontSize=12,
-                                      textColor=colors.HexColor('#2c3e50'),
-                                      spaceBefore=10))
-        story.append(title)
+        # Enhanced: Use markdown converter for title formatting
+        title_markdown = f"## {issue.title}"
+        title_elements = self.markdown_converter.convert_to_pdf_elements(title_markdown)
+        story.extend(title_elements)
 
-        # 메타정보
-        meta_info = f"출처: {issue.source} | 발행일: {issue.published_date or 'N/A'} | "
-        meta_info += f"신뢰도: {getattr(issue, 'combined_confidence', 0.5):.1%}"
-
-        meta = Paragraph(meta_info,
-                        ParagraphStyle('IssueMeta',
-                                     parent=self.styles['CustomBody'],
-                                     fontSize=9,
-                                     textColor=colors.HexColor('#7f8c8d')))
-        story.append(meta)
+        # Enhanced: Visual confidence indicator with color coding
+        confidence = getattr(issue, 'combined_confidence', 0.5)
+        confidence_indicator = self.markdown_converter.format_confidence_text(confidence)
+        
+        meta_info = f"**출처**: {issue.source} | **발행일**: {issue.published_date or 'N/A'} | **신뢰도**: {confidence_indicator}"
+        meta_elements = self.markdown_converter.convert_to_pdf_elements(meta_info)
+        story.extend(meta_elements)
+        
         story.append(Spacer(1, 0.1*inch))
 
-        # 요약
-        summary = Paragraph(issue.summary, self.styles['CustomBody'])
-        story.append(summary)
+        # Enhanced: Parse summary as markdown for better formatting
+        summary_markdown = f"### 요약\n{issue.summary}"
+        summary_elements = self.markdown_converter.convert_to_pdf_elements(summary_markdown)
+        story.extend(summary_elements)
 
-        # 상세 내용 (있는 경우)
+        # Enhanced: Parse detailed content as markdown (if exists)
         if issue.detailed_content:
             story.append(Spacer(1, 0.1*inch))
-            detail = Paragraph(
-                issue.detailed_content[:500] + "..." if len(issue.detailed_content) > 500
-                else issue.detailed_content,
-                self.styles['CustomBody']
-            )
-            story.append(detail)
+            
+            # Truncate if too long but preserve markdown structure
+            detailed_content = issue.detailed_content
+            if len(detailed_content) > 1000:
+                # Find a good break point (end of paragraph or sentence)
+                truncate_point = 1000
+                for punct in ['\n\n', '\n', '. ', '? ', '! ']:
+                    last_punct = detailed_content.rfind(punct, 0, 1000)
+                    if last_punct > 800:  # Must be reasonably long
+                        truncate_point = last_punct + len(punct)
+                        break
+                detailed_content = detailed_content[:truncate_point] + "\n\n*[내용이 너무 길어 일부만 표시됩니다...]*"
+            
+            detail_markdown = f"### 상세 내용\n{detailed_content}"
+            detail_elements = self.markdown_converter.convert_to_pdf_elements(detail_markdown)
+            story.extend(detail_elements)
 
         story.append(Spacer(1, 0.2*inch))
         return story
 
     def _create_trend_analysis(self, data: Dict[str, Any]) -> List:
-        """트렌드 분석 섹션 생성."""
+        """트렌드 분석 섹션 생성 (Enhanced with markdown parsing)."""
         story = []
         sections = data['enhanced_sections']
 
-        story.append(Paragraph("4. 트렌드 분석", self.styles['CustomHeading1']))
-        story.append(Spacer(1, 0.2*inch))
+        # Enhanced: Use markdown for section header
+        header_markdown = "# 4. 트렌드 분석"
+        header_elements = self.markdown_converter.convert_to_pdf_elements(header_markdown)
+        story.extend(header_elements)
 
+        # Enhanced: Parse trend analysis content as markdown
         trend_text = sections.get('trend_analysis', '트렌드 분석 정보가 없습니다.')
-        story.append(Paragraph(trend_text, self.styles['CustomBody']))
+        trend_elements = self.markdown_converter.convert_to_pdf_elements(trend_text)
+        story.extend(trend_elements)
 
         story.append(Spacer(1, 0.3*inch))
         return story
 
     def _create_risks_opportunities(self, data: Dict[str, Any]) -> List:
-        """리스크 및 기회 섹션 생성."""
+        """리스크 및 기회 섹션 생성 (Enhanced with markdown parsing)."""
         story = []
         sections = data['enhanced_sections']
 
-        story.append(Paragraph("5. 리스크 및 기회", self.styles['CustomHeading1']))
-        story.append(Spacer(1, 0.2*inch))
+        # Enhanced: Use markdown for section header
+        header_markdown = "# 5. 리스크 및 기회"
+        header_elements = self.markdown_converter.convert_to_pdf_elements(header_markdown)
+        story.extend(header_elements)
 
+        # Enhanced: Parse risks and opportunities content as markdown
         ro_text = sections.get('risks_opportunities', '리스크 및 기회 분석 정보가 없습니다.')
-        story.append(Paragraph(ro_text, self.styles['CustomBody']))
+        ro_elements = self.markdown_converter.convert_to_pdf_elements(ro_text)
+        story.extend(ro_elements)
 
         story.append(Spacer(1, 0.3*inch))
         return story
+
+    def _create_dynamic_sections(self, data: Dict[str, Any]) -> List:
+        """
+        Dynamic: Generate report sections based on topic classification.
+        Only creates relevant sections for the specific topic type.
+        """
+        story = []
+        search_result = data['search_result']
+        
+        # Classify the topic
+        topic = " ".join(search_result.query_keywords)
+        keywords = search_result.query_keywords
+        classification = self.topic_classifier.classify_topic(topic, keywords)
+        
+        logger.info(f"Topic classified as: {classification.primary_type.value} "
+                   f"(confidence: {classification.confidence:.1%})")
+        
+        # Add classification info to the report
+        classification_markdown = f"""
+## 🎯 주제 분석 결과
+
+**주제 유형**: {self._get_topic_type_korean(classification.primary_type)}  
+**신뢰도**: {classification.confidence:.1%}  
+**분석 근거**: {classification.reasoning}  
+**매칭 키워드**: {', '.join(classification.keywords_matched)}
+
+---
+"""
+        classification_elements = self.markdown_converter.convert_to_pdf_elements(classification_markdown)
+        story.extend(classification_elements)
+        
+        # Generate sections based on classification
+        section_number = 2  # Start after executive summary
+        
+        # Always include key findings
+        story.extend(self._create_key_findings(data))
+        section_number += 1
+        
+        # Always include detailed issues
+        story.extend(self._create_detailed_issues(data))
+        section_number += 1
+        
+        # Conditionally include other sections based on topic type
+        if self._should_include_trend_analysis(classification):
+            story.extend(self._create_trend_analysis(data))
+            section_number += 1
+        
+        if self._should_include_risk_analysis(classification):
+            story.extend(self._create_risks_opportunities(data))
+            section_number += 1
+        
+        # Always include recommendations but adapt content
+        story.extend(self._create_adaptive_recommendations(data, classification))
+        
+        return story
+
+    def _get_topic_type_korean(self, topic_type) -> str:
+        """Convert topic type to Korean description."""
+        type_names = {
+            'technical_announcement': '기술 발표/업데이트',
+            'product_launch': '제품 출시',
+            'business_strategic': '비즈니스/전략',
+            'research_scientific': '연구/과학',
+            'social_political': '사회/정치',
+            'financial_market': '금융/시장',
+            'general': '일반'
+        }
+        return type_names.get(topic_type.value, '일반')
+
+    def _should_include_trend_analysis(self, classification) -> bool:
+        """Determine if trend analysis should be included."""
+        # Include for most types except pure technical announcements
+        if classification.primary_type.value == 'technical_announcement' and classification.confidence > 0.8:
+            return False
+        return True
+
+    def _should_include_risk_analysis(self, classification) -> bool:
+        """Determine if risk analysis should be included."""
+        return self.topic_classifier.should_include_risk_analysis(classification)
+
+    def _create_adaptive_recommendations(self, data: Dict[str, Any], classification) -> List:
+        """Create recommendations adapted to topic type."""
+        story = []
+        sections = data['enhanced_sections']
+
+        # Adaptive header based on topic type
+        if classification.primary_type.value == 'technical_announcement':
+            header = "# 🔧 기술 구현 가이드라인"
+        elif classification.primary_type.value == 'product_launch':
+            header = "# 📱 제품 활용 방안"
+        elif classification.primary_type.value == 'business_strategic':
+            header = "# 📊 전략적 대응 방안"
+        elif classification.primary_type.value == 'research_scientific':
+            header = "# 🔬 연구 활용 및 후속 연구"
+        else:
+            header = "# 💡 권장 조치사항"
+
+        header_elements = self.markdown_converter.convert_to_pdf_elements(header)
+        story.extend(header_elements)
+
+        # Adaptive content
+        recommendations = sections.get('recommended_actions', [])
+        if recommendations:
+            rec_text = "\n".join([f"- {rec}" for rec in recommendations])
+        else:
+            # Generate default recommendations based on topic type
+            rec_text = self._generate_default_recommendations(classification)
+
+        rec_elements = self.markdown_converter.convert_to_pdf_elements(rec_text)
+        story.extend(rec_elements)
+
+        story.append(Spacer(1, 0.3*inch))
+        return story
+
+    def _generate_default_recommendations(self, classification) -> str:
+        """Generate default recommendations based on topic type."""
+        if classification.primary_type.value == 'technical_announcement':
+            return """
+- 새로운 기술 동향을 지속적으로 모니터링하세요
+- 개발팀과 기술 변화 사항을 공유하세요
+- 호환성 및 마이그레이션 계획을 수립하세요
+- 관련 문서 및 가이드를 업데이트하세요
+"""
+        elif classification.primary_type.value == 'business_strategic':
+            return """
+- 시장 변화에 따른 전략 조정을 검토하세요
+- 경쟁사 동향을 지속적으로 분석하세요
+- 이해관계자들과 소통 계획을 수립하세요
+- 리스크 관리 체계를 강화하세요
+"""
+        else:
+            return """
+- 관련 정보를 지속적으로 모니터링하세요
+- 주요 이해관계자들과 정보를 공유하세요
+- 필요시 전문가 의견을 구하세요
+- 변화에 대한 대응 계획을 수립하세요
+"""
 
     def _create_recommendations(self, data: Dict[str, Any]) -> List:
         """권장 조치사항 섹션 생성."""

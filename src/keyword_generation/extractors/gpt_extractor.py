@@ -202,7 +202,7 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
                 if message.tool_calls:
                     logger.debug(f"GPT가 웹 검색 요청: {len(message.tool_calls)}개 검색")
 
-                    # 검색 수행
+                    # Performance: Parallel web search execution
                     messages = [
                         {
                             "role": "system",
@@ -213,22 +213,39 @@ class GPTKeywordExtractor(BaseKeywordExtractor):
                         message
                     ]
 
+                    # Performance: Collect all search tasks for parallel execution
+                    search_tasks = []
+                    tool_call_mapping = {}
+                    
                     for tool_call in message.tool_calls:
                         if tool_call.function.name == "web_search":
                             args = json.loads(tool_call.function.arguments)
                             query = args.get("query", "")
+                            
+                            logger.debug(f"웹 검색 준비: {query}")
+                            search_task = self._perform_web_search(query)
+                            search_tasks.append(search_task)
+                            tool_call_mapping[len(search_tasks) - 1] = tool_call
 
-                            logger.debug(f"웹 검색 수행: {query}")
-
-                            # 실제 웹 검색 수행
-                            search_result = await self._perform_web_search(query)
-
-                            # 검색 결과를 대화에 추가
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": search_result
-                            })
+                    # Performance: Execute all searches in parallel
+                    if search_tasks:
+                        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+                        
+                        # Add all search results to messages
+                        for i, (search_result, tool_call) in enumerate(zip(search_results, tool_call_mapping.values())):
+                            if not isinstance(search_result, Exception):
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": search_result
+                                })
+                            else:
+                                logger.warning(f"Web search failed: {search_result}")
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": f"검색 실패: {str(search_result)}"
+                                })
 
                     # 검색 결과를 포함한 최종 응답 생성
                     final_response = await self.client.chat.completions.create(

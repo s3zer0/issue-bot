@@ -16,6 +16,8 @@ from datetime import datetime, timedelta
 import re
 import sys
 import os
+import time
+import asyncio
 from loguru import logger
 
 # --- 모듈 임포트 ---
@@ -171,14 +173,44 @@ async def monitor_command(interaction: discord.Interaction, 주제: str, 기간:
             )
             await interaction.edit_original_response(embed=progress_embed)
 
-        # 1. 키워드 생성
+        # Performance: Start processing with streaming updates
+        start_time = time.time()
+        
+        # 1. 키워드 생성 (with streaming progress)
         await update_progress(1, "AI 키워드 생성 중...")
-        keyword_result = await generate_keywords_for_topic(주제)
+        keyword_task = asyncio.create_task(generate_keywords_for_topic(주제))
+        
+        # Show streaming progress for keyword generation
+        while not keyword_task.done():
+            elapsed = time.time() - start_time
+            await update_progress(1, f"AI 키워드 생성 중... ({elapsed:.1f}초 경과)")
+            await asyncio.sleep(2)  # Update every 2 seconds
+        
+        keyword_result = await keyword_task
+        
+        # Show intermediate results to user
+        preview_keywords = ", ".join(keyword_result.primary_keywords[:3])
+        await update_progress(1, f"✅ 키워드 생성 완료: {preview_keywords} 등 {len(keyword_result.primary_keywords)}개")
+        await asyncio.sleep(1)  # Brief pause to show completion
 
-        # 2. 환각 탐지가 통합된 검색기 실행
+        # 2. 환각 탐지가 통합된 검색기 실행 (with streaming progress)
         await update_progress(2, "이슈 검색 및 환각 탐지 중...")
         enhanced_searcher = EnhancedIssueSearcher()
-        search_result = await enhanced_searcher.search_with_validation(keyword_result, period_description)
+        search_task = asyncio.create_task(enhanced_searcher.search_with_validation(keyword_result, period_description))
+        
+        # Show streaming progress for search
+        search_start = time.time()
+        while not search_task.done():
+            elapsed = time.time() - search_start
+            await update_progress(2, f"이슈 검색 및 환각 탐지 중... ({elapsed:.1f}초 경과)")
+            await asyncio.sleep(3)  # Update every 3 seconds for longer operations
+        
+        search_result = await search_task
+        
+        # Show search results preview
+        issue_count = len(search_result.issues)
+        await update_progress(2, f"✅ {issue_count}개 이슈 발견 및 검증 완료")
+        await asyncio.sleep(1)
 
         # 3. 향상된 보고서 생성 (마크다운 + PDF)
         await update_progress(3, "마크다운 보고서 생성 중...")

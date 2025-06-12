@@ -306,18 +306,28 @@ class IssueSearcher:
 
     async def _collect_and_update_details(self, issues: List[IssueItem]):
         """상세 정보를 병렬로 수집하고 원본 이슈 리스트를 업데이트합니다.
+        
+        Performance Optimized: O(n) → O(1) index lookups
 
         Args:
             issues (List[IssueItem]): 상세 정보를 수집할 이슈 리스트.
         """
         issues_to_detail = issues[:self.max_detailed_issues]
+        
+        # Performance: Create O(1) index mapping instead of O(n) list.index() calls
+        issue_index_map = {id(issue): i for i, issue in enumerate(issues)}
+        
+        # Parallel detail collection (already optimized)
         tasks = [self._collect_issue_details(issue) for issue in issues_to_detail]
-        detailed_results = await asyncio.gather(*tasks)
+        detailed_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 원본 리스트에 상세 정보 반영
-        for i, updated_issue in enumerate(detailed_results):
-            original_index = issues.index(issues_to_detail[i])
-            issues[original_index] = updated_issue
+        # Performance: O(1) updates using pre-computed indices
+        for original_issue, updated_result in zip(issues_to_detail, detailed_results):
+            if not isinstance(updated_result, Exception):
+                idx = issue_index_map[id(original_issue)]
+                issues[idx] = updated_result
+            else:
+                logger.warning(f"Failed to collect details for issue: {original_issue.title[:30]}..., Error: {updated_result}")
 
     async def _collect_issue_details(self, issue: IssueItem) -> IssueItem:
         """단일 이슈에 대한 상세 정보를 비동기적으로 수집합니다.
