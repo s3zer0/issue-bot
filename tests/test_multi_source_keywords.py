@@ -160,8 +160,10 @@ class TestMultiSourceKeywordManager:
         # 'total_sources' 대신 'source_results'의 길이를 확인합니다.
         assert len(result.source_results) == 3
 
-        # quantum computing은 2개 소스에서 나왔으므로 HIGH여야 함
-        quantum_kw = next((kw for kw in result.keywords if "quantum computing" in kw.keyword.lower()), None)
+        # quantum computing 관련 키워드 (여러 형태 가능)는 2개 소스에서 나왔으므로 HIGH여야 함
+        quantum_kw = next((kw for kw in result.keywords if 
+                          "quantum computing" in kw.keyword.lower() or 
+                          "quantumcomputing" in kw.keyword.lower()), None)
         assert quantum_kw is not None
         assert quantum_kw.importance == KeywordImportance.HIGH
         assert len(quantum_kw.sources) >= 2

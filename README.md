@@ -63,7 +63,12 @@ pip install -r requirements.txt
 
 #### `.env` 파일 설정
 
-프로젝트 루트 디렉토리에 `.env` 파일을 생성하고 아래 내용을 실제 값으로 채워넣으세요.
+1. 제공된 `.env.example` 파일을 복사하여 `.env` 파일을 생성합니다:
+```bash
+cp .env.example .env
+```
+
+2. `.env` 파일을 열어 실제 API 키로 교체합니다:
 
 ```env
 # Discord Bot
@@ -78,6 +83,8 @@ DEVELOPMENT_MODE=true
 LOG_LEVEL=INFO
 OPENAI_MODEL=gpt-4o
 ```
+
+> ⚠️ **보안 주의사항**: 절대로 실제 API 키나 토큰을 소스 코드에 직접 입력하지 마세요. 환경 변수를 통해 관리하고, `.env` 파일은 반드시 `.gitignore`에 포함되어 있는지 확인하세요.
 
 ### 3. 실행 방법
 

@@ -31,6 +31,25 @@ class MarkdownToPDFConverter:
     def __init__(self, default_font: str = 'NotoSansKR'):
         """Initialize converter with font settings."""
         self.default_font = default_font
+        # Use known safe fonts, fallback to Helvetica for unknown fonts
+        safe_fonts = ['helvetica', 'times', 'courier', 'symbol', 'zapfdingbats']
+        korean_fonts = ['notosanskr', 'nanasgothic', 'malgun gothic', 'malgungothic']
+        
+        if default_font and (
+            default_font.lower() in safe_fonts or 
+            default_font.lower().replace('-', '').replace('_', '').replace(' ', '') in korean_fonts
+        ):
+            self.font_name = default_font
+            # Korean fonts don't follow the standard Bold naming convention
+            if any(korean_font in default_font.lower().replace('-', '').replace('_', '').replace(' ', '') 
+                   for korean_font in korean_fonts):
+                self.bold_font = default_font  # Use same font for bold (TTF handles weight)
+            else:
+                self.bold_font = f'{default_font}-Bold'
+        else:
+            # For testing or unknown fonts, use Helvetica as safe fallback
+            self.font_name = 'Helvetica'
+            self.bold_font = 'Helvetica-Bold'
         self.styles = self._create_markdown_styles()
         
         # Regex patterns for markdown elements
@@ -59,7 +78,7 @@ class MarkdownToPDFConverter:
         # Base style
         styles['base'] = ParagraphStyle(
             'MarkdownBase',
-            fontName=self.default_font,
+            fontName=self.font_name,
             fontSize=11,
             leading=14,
             textColor=colors.HexColor('#333333'),
@@ -73,7 +92,7 @@ class MarkdownToPDFConverter:
             'MarkdownH1',
             parent=styles['base'],
             fontSize=20,
-            fontName=f'{self.default_font}',
+            fontName=self.bold_font,
             textColor=colors.HexColor('#1a1a1a'),
             spaceBefore=20,
             spaceAfter=15,
@@ -87,7 +106,7 @@ class MarkdownToPDFConverter:
             'MarkdownH2',
             parent=styles['base'],
             fontSize=16,
-            fontName=f'{self.default_font}',
+            fontName=self.bold_font,
             textColor=colors.HexColor('#2c3e50'),
             spaceBefore=16,
             spaceAfter=12,
@@ -101,7 +120,7 @@ class MarkdownToPDFConverter:
             'MarkdownH3',
             parent=styles['base'],
             fontSize=14,
-            fontName=f'{self.default_font}',
+            fontName=self.bold_font,
             textColor=colors.HexColor('#34495e'),
             spaceBefore=12,
             spaceAfter=8,
@@ -112,7 +131,7 @@ class MarkdownToPDFConverter:
             'MarkdownH4',
             parent=styles['base'],
             fontSize=12,
-            fontName=f'{self.default_font}',
+            fontName=self.bold_font,
             textColor=colors.HexColor('#7f8c8d'),
             spaceBefore=10,
             spaceAfter=6,
@@ -151,6 +170,7 @@ class MarkdownToPDFConverter:
         styles['list_item'] = ParagraphStyle(
             'MarkdownListItem',
             parent=styles['base'],
+            fontName=self.font_name,
             leftIndent=20,
             bulletIndent=10,
             spaceBefore=2,
@@ -358,6 +378,9 @@ class MarkdownToPDFConverter:
         if not text:
             return ""
         
+        # 콘텐츠 정제: 디버깅 메시지 제거
+        text = self._clean_debug_content(text)
+        
         # Escape XML/HTML entities first
         text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
@@ -369,7 +392,7 @@ class MarkdownToPDFConverter:
         
         # Inline code
         text = self.patterns['inline_code'].sub(
-            r'<font name="Courier" color="#e74c3c" backgroundColor="#f8f9fa">\1</font>', text)
+            r'<font name="Courier" color="#e74c3c" backColor="#f8f9fa">\1</font>', text)
         
         # Links - make them blue and underlined
         text = self.patterns['link'].sub(
@@ -377,6 +400,45 @@ class MarkdownToPDFConverter:
         
         # Preserve emojis by detecting and keeping them
         text = self.patterns['emoji'].sub(r'\1', text)
+        
+        return text
+    
+    def _clean_debug_content(self, text: str) -> str:
+        """
+        텍스트에서 디버깅 메시지나 키워드 재생성 메시지를 제거합니다.
+        
+        Args:
+            text: 정제할 텍스트
+            
+        Returns:
+            str: 정제된 텍스트
+        """
+        if not text:
+            return text
+            
+        # 디버깅 메시지 패턴들
+        debug_patterns = [
+            r'Keywords? need to be regenerated for topic[^.]*\.?',
+            r'키워드.*재생성[^.]*\.?',
+            r'시뮬레이션 모드[^.]*\.?',
+            r'API 실패.*폴백[^.]*\.?',
+            r'최종 폴백[^.]*\.?',
+            r'연속 실패.*회[^.]*\.?',
+            r'Error occurred during keyword generation[^.]*\.?',
+            r'하이브리드 검색[^.]*\.?',
+        ]
+        
+        # 각 패턴에 대해 제거
+        original_text = text
+        for pattern in debug_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        
+        # 로그 (변경된 경우에만)
+        if text != original_text:
+            logger.debug("마크다운 파서에서 디버깅 메시지 제거됨")
+        
+        # 중복 공백 정리
+        text = re.sub(r'\s+', ' ', text).strip()
         
         return text
     

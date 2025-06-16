@@ -24,6 +24,8 @@ class Config:
 
     def __init__(self):
         """Config 인스턴스를 초기화하고 환경 설정을 수행합니다."""
+        # 로거 초기화
+        self.logger = logger
         # 환경 설정 및 .env 파일 로드를 순차적으로 수행
         self._setup_environment()
         self._load_env_file()
@@ -139,12 +141,12 @@ class Config:
     def get_openai_max_tokens(self) -> int:
         """OpenAI API의 max_tokens 설정 값을 반환합니다."""
         try:
-            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 1500
-            return int(os.getenv('OPENAI_MAX_TOKENS', 1500))
+            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 4000
+            return int(os.getenv('OPENAI_MAX_TOKENS', 4000))
         except (ValueError, TypeError):
             # 변환 실패 시 경고 로그 출력 후 기본값 반환
-            logger.warning("OPENAI_MAX_TOKENS 값이 잘못되어 기본값(1500)을 사용합니다.")
-            return 1500
+            logger.warning("OPENAI_MAX_TOKENS 값이 잘못되어 기본값(4000)을 사용합니다.")
+            return 4000
 
     def get_grok_model(self) -> str:
         """Grok 모델 이름을 반환합니다."""
@@ -160,6 +162,26 @@ class Config:
             # 변환 실패 시 경고 로그 출력 후 기본값 반환
             logger.warning("GROK_TIMEOUT 값이 잘못되어 기본값(60)을 사용합니다.")
             return 60
+
+    def get_perplexity_model(self) -> str:
+        """Perplexity 모델 이름을 반환합니다."""
+        # 환경 변수에서 PERPLEXITY_MODEL 값을 가져오며, 기본값은 llama-3.1-sonar-large-128k-online
+        return os.getenv('PERPLEXITY_MODEL', 'llama-3.1-sonar-large-128k-online')
+    
+    def get_perplexity_max_tokens(self) -> int:
+        """Perplexity API의 max_tokens 설정 값을 반환합니다."""
+        try:
+            # 환경 변수에서 값을 가져와 int로 변환, 기본값은 4000
+            tokens = int(os.getenv('PERPLEXITY_MAX_TOKENS', 4000))
+            # 음수나 비정상적인 값 체크
+            if tokens <= 0:
+                logger.warning(f"PERPLEXITY_MAX_TOKENS 값이 유효하지 않음({tokens}). 기본값(4000)을 사용합니다.")
+                return 4000
+            return tokens
+        except (ValueError, TypeError):
+            # 변환 실패 시 경고 로그 출력 후 기본값 반환
+            logger.warning("PERPLEXITY_MAX_TOKENS 값이 잘못되어 기본값(4000)을 사용합니다.")
+            return 4000
 
     def get_keyword_generation_timeout(self) -> int:
         """키워드 생성 시 타임아웃(초) 설정 값을 반환합니다."""
@@ -182,6 +204,40 @@ class Config:
             return 3
 
     # --- 범용 Getter (새로 추가된 부분) ---
+    def get_env_var(self, key: str, default: Any = None, cast: Optional[Callable] = None) -> Any:
+        """
+        환경 변수에서 값을 가져옵니다. 기본값 및 타입 캐스팅을 지원합니다.
+        `config.get_env_var('MY_VAR', default=10, cast=int)`와 같이 사용합니다.
+
+        Args:
+            key (str): 가져올 환경 변수의 이름입니다.
+            default (Any, optional): 변수가 없을 때 반환할 기본값입니다. Defaults to None.
+            cast (Optional[Callable], optional): 값을 변환할 함수(e.g., int, float). Defaults to None.
+
+        Returns:
+            Any: 환경 변수 값. 캐스팅되었거나 기본값이 반환될 수 있습니다.
+        """
+        value = os.getenv(key)
+
+        if value is None:
+            # 환경 변수가 없으면 기본값을 반환
+            return default
+
+        if cast:
+            try:
+                # 캐스팅 함수가 있으면 값 변환 시도
+                return cast(value)
+            except (ValueError, TypeError):
+                # 변환 실패 시 경고 로그를 남기고 기본값을 반환
+                logger.warning(
+                    f"환경 변수 '{key}'의 값 '{value}'를 '{cast.__name__}' 타입으로 변환할 수 없습니다. "
+                    f"기본값인 '{default}'를 사용합니다."
+                )
+                return default
+
+        # 캐스팅이 없으면 문자열 값 그대로 반환
+        return value
+
     def get(self, key: str, default: Any = None, cast: Optional[Callable] = None) -> Any:
         """
         환경 변수에서 값을 가져옵니다. 기본값 및 타입 캐스팅을 지원합니다.

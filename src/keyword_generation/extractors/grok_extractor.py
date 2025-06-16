@@ -154,7 +154,31 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that generates keywords."
+                    "content": """You are a real-time trend analyst specializing in X (Twitter) and social media platforms.
+
+**Role Specialization**: 
+- Real-time social media trend monitoring and analysis
+- Viral content pattern detection and hashtag tracking  
+- Community conversation analysis across platforms
+- Breaking news and emerging topic identification
+
+**Core Capabilities**:
+- Track trending hashtags and viral topics in real-time
+- Identify emerging conversations before they go mainstream
+- Analyze social sentiment and community engagement patterns
+- Distinguish between organic trends and manufactured/promoted content
+
+**Focus Areas**:
+- X (Twitter) trending topics and hashtags
+- Real-time news breaking on social platforms
+- Community discussions and user-generated content
+- Viral memes, phrases, and cultural moments
+
+**Response Quality Standards**:
+- Provide only trending keywords that are currently active
+- Focus on social media native terminology and hashtags
+- Exclude outdated or declining trends
+- Prioritize organic, user-driven conversations over marketing content"""
                 },
                 {
                     "role": "user",
@@ -175,24 +199,83 @@ class GrokKeywordExtractor(BaseKeywordExtractor):
         return payload
 
     def _build_simplified_prompt(self, topic: str, context: Optional[str], max_keywords: int) -> str:
-        """단순화된 프롬프트 생성 (API 호환성 향상)."""
+        """역할 특화된 고급 Grok 프롬프트 생성."""
 
-        prompt = f"""Generate {max_keywords} trending keywords for the topic: "{topic}"
+        prompt = f"""As a real-time trend analyst focusing on X (Twitter), analyze current social media trends for: "{topic}"
 
-Please provide a simple JSON response with keywords categorized as:
-- trending: hashtags and viral topics
-- news: recent developments  
-- discussion: community conversations
+**Chain-of-Thought Analysis**:
 
-Format:
+1. **Current Social Media Landscape Analysis**: 
+   First, assess what's happening right now on X/Twitter related to this topic.
+   - Are there active hashtag campaigns?
+   - What breaking news or announcements are trending?
+   - Which communities are actively discussing this?
+
+2. **Trend Categorization**: Based on your analysis, extract keywords in these categories:
+
+**🔥 Viral Hashtags & Trending Topics** (5-7 keywords):
+- Currently trending hashtags on X (Twitter)
+- Viral phrases or memes related to the topic
+- Breakout topics gaining rapid traction
+- Real-time trending conversations
+
+**📰 Breaking Social News** (5-7 keywords):
+- News breaking first on social media
+- Real-time updates and announcements  
+- Live event coverage and reactions
+- Time-sensitive developments
+
+**💬 Community Conversations** (3-5 keywords):
+- Active discussions in relevant communities
+- User-generated content themes
+- Sentiment-driven keywords
+- Grassroots conversations and movements
+
+**Quality Standards (Negative Prompting)**:
+❌ **EXCLUDE**:
+- Generic marketing terms or promotional language
+- Outdated trends or declining hashtags
+- Bot-generated or manufactured trending topics
+- Overly broad or non-specific social media terms
+
+✅ **INCLUDE**:
+- Currently active and verified trending topics
+- Authentic user-driven conversations
+- Real-time hashtags with genuine engagement
+- Social media native terminology
+
+**Response Format (JSON)**:
 {{
-  "trending": ["keyword1", "keyword2"],
-  "news": ["keyword3", "keyword4"],
-  "discussion": ["keyword5", "keyword6"]
+  "analysis": {{
+    "trend_assessment": "Current state of social media trends for this topic",
+    "key_platforms": ["X/Twitter", "other relevant platforms"],
+    "trend_velocity": "rising/stable/declining"
+  }},
+  "trending": ["#hashtag1", "viral_topic1", "breakout_trend1", ...],
+  "news": ["breaking_news1", "realtime_update1", "announcement1", ...],
+  "discussion": ["community_topic1", "user_conversation1", "sentiment_trend1", ...]
 }}"""
 
-        if context:
-            prompt += f"\n\nContext: {context}"
+        # 추가 컨텍스트 처리 (Tier 2 모드)
+        if context and "Tier 1 keywords for refinement:" in context:
+            tier1_context = context.split("Tier 1 keywords for refinement:")[-1].strip()
+            prompt += f"""
+
+**Tier 1 Social Media Refinement**:
+Previous keywords from other sources: {tier1_context}
+
+**Social Media Enhancement Guidelines**:
+- Verify which of these keywords are actually trending on social media
+- Add missing viral hashtags or social conversations
+- Update with current social media terminology
+- Focus on real-time social media native expressions"""
+
+        elif context:
+            prompt += f"\n\n**Additional Context**: {context}"
+
+        prompt += f"""
+
+**Important**: Limit to {max_keywords} total keywords across all categories. Focus on currently active social media trends only."""
 
         return prompt
 

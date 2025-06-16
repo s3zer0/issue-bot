@@ -137,9 +137,9 @@ class TestEnhancedReportingWithPDF:
         assert "## 🔴 낮은 신뢰도 이슈" in report
         assert "## 🛡️ 환각 탐지 분석" in report
 
-        # 신뢰도 분포 정보 확인
-        assert "높은 신뢰도: 1개" in report
-        assert "낮은 신뢰도: 1개" in report
+        # 신뢰도 분포 정보 확인 (더 유연한 검증)
+        assert "높은 신뢰도**: 1개" in report
+        assert "낮은 신뢰도**: 1개" in report
 
     @pytest.mark.asyncio
     async def test_save_markdown_report_to_file(self, sample_search_result):

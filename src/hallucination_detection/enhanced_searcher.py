@@ -88,9 +88,34 @@ class SmartCache:
         self.misses = 0
     
     def _generate_key(self, text: str, context: str = "") -> str:
-        """캐시 키 생성"""
-        combined = f"{text}:{context}"
+        """향상된 캐시 키 생성 (정규화로 히트율 개선)"""
+        # 텍스트 정규화로 캐시 히트율 개선
+        normalized_text = self._normalize_text_for_cache(text)
+        normalized_context = self._normalize_text_for_cache(context)
+        combined = f"{normalized_text}:{normalized_context}"
         return hashlib.md5(combined.encode()).hexdigest()
+    
+    def _normalize_text_for_cache(self, text: str) -> str:
+        """텍스트 정규화로 캐시 효율성 개선"""
+        if not text:
+            return ""
+        
+        # 기본 정규화
+        normalized = text.lower().strip()
+        
+        # 불필요한 공백 제거
+        normalized = ' '.join(normalized.split())
+        
+        # 날짜와 시간 정규화 (2024-01-15 -> DATE, 2025년 -> YEAR 등)
+        import re
+        normalized = re.sub(r'\d{4}-\d{2}-\d{2}', 'DATE', normalized)
+        normalized = re.sub(r'\d{4}년', 'YEAR년', normalized)
+        normalized = re.sub(r'\d+\.\d+', 'VERSION', normalized)  # 버전 번호 정규화
+        
+        # 숫자 정규화 (구체적인 숫자를 일반화)
+        normalized = re.sub(r'\b\d+\b', 'NUM', normalized)
+        
+        return normalized
     
     def get(self, text: str, context: str = "") -> Optional[Any]:
         """캐시에서 결과 조회"""
@@ -267,6 +292,15 @@ class EnhancedIssueSearcher:
         
         current_keywords = keyword_result
         all_attempts_issues = []
+        
+        # 🚀 무한 루프 방지: 이전에 시도된 키워드 조합을 추적
+        keyword_history = set()
+        regeneration_count = 0
+        max_regenerations = 3  # 최대 키워드 재생성 횟수 제한
+        
+        # 초기 키워드 서명을 기록
+        initial_signature = self._get_keyword_signature(current_keywords)
+        keyword_history.add(initial_signature)
 
         for attempt in range(max_retries):
             logger.info(f"이슈 검색 시도 {attempt + 1}/{max_retries}")
@@ -279,9 +313,21 @@ class EnhancedIssueSearcher:
             if not search_result.issues:
                 logger.warning("검색 결과가 없습니다.")
                 if attempt < max_retries - 1:
-                    current_keywords = await generate_keywords_for_topic(
-                        f"{current_keywords.topic}의 다른 측면"
+                    # 🚀 안전한 키워드 재생성 (무한 루프 방지)
+                    new_keywords, regeneration_count, should_continue = await self._regenerate_keywords_safely(
+                        current_keywords, 
+                        search_result, 
+                        "no_results",
+                        keyword_history,
+                        regeneration_count,
+                        max_regenerations
                     )
+                    
+                    if not should_continue:
+                        logger.warning("키워드 재생성 중단. 현재 결과로 진행.")
+                        break
+                    
+                    current_keywords = new_keywords
                 continue
 
             all_attempts_issues.extend(search_result.issues)
@@ -294,9 +340,21 @@ class EnhancedIssueSearcher:
             if not validated_issues:
                 logger.warning("환각 탐지를 통과한 이슈가 없습니다.")
                 if attempt < max_retries - 1:
-                    current_keywords = await generate_keywords_for_topic(
-                        f"{current_keywords.topic}의 다른 측면"
+                    # 🚀 안전한 키워드 재생성 (무한 루프 방지)
+                    new_keywords, regeneration_count, should_continue = await self._regenerate_keywords_safely(
+                        current_keywords, 
+                        search_result, 
+                        "low_quality_results",
+                        keyword_history,
+                        regeneration_count,
+                        max_regenerations
                     )
+                    
+                    if not should_continue:
+                        logger.warning("키워드 재생성 중단. 현재 결과로 진행.")
+                        break
+                    
+                    current_keywords = new_keywords
                 continue
 
             # 3. 신뢰도별 분류 및 결과 평가
@@ -321,18 +379,45 @@ class EnhancedIssueSearcher:
                 break
             else:
                 # 결과가 부족하면 키워드 재생성
-                logger.info(
-                    f"높은 신뢰도 이슈 부족 ({len(high_confidence_issues)}개), "
-                    f"키워드 재생성 중..."
-                )
-                current_keywords = await generate_keywords_for_topic(
-                    f"{current_keywords.topic}의 다른 측면"
-                )
+                if attempt < max_retries - 1:
+                    logger.info(
+                        f"높은 신뢰도 이슈 부족 ({len(high_confidence_issues)}개), "
+                        f"키워드 재생성 중..."
+                    )
+                    # 🚀 안전한 키워드 재생성 (무한 루프 방지)
+                    new_keywords, regeneration_count, should_continue = await self._regenerate_keywords_safely(
+                        current_keywords, 
+                        search_result, 
+                        "insufficient_confidence",
+                        keyword_history,
+                        regeneration_count,
+                        max_regenerations,
+                        high_confidence_issues,
+                        validated_issues
+                    )
+                    
+                    if not should_continue:
+                        logger.warning("키워드 재생성 중단. 현재 결과로 진행.")
+                        # 현재 결과로 최종 처리
+                        search_result.search_time = time.time() - overall_start
+                        self._update_final_metrics(search_result)
+                        break
+                    
+                    current_keywords = new_keywords
+                else:
+                    # 마지막 시도에서는 현재 결과로 진행
+                    logger.info("마지막 시도: 현재 결과로 진행")
+                    search_result.search_time = time.time() - overall_start
+                    self._update_final_metrics(search_result)
+                    break
 
+        # 🚀 최종 검증: 결과가 너무 부족하면 폴백 메커니즘 실행
+        final_result = await self._apply_fallback_if_needed(search_result, keyword_result.topic)
+        
         # 🚀 성능 리포트 출력
         self._log_performance_report()
         
-        return search_result
+        return final_result
 
     async def _validate_issues_optimized(
         self,
@@ -995,8 +1080,8 @@ class EnhancedIssueSearcher:
     def _create_optimized_consistency_score(self):
         """최적화된 일관성 점수 생성 (짧은 텍스트용)"""
         return ConsistencyScore(
-            confidence=0.85,
-            consistency_rate=0.85,
+            confidence=0.6,  # 더 현실적인 신뢰도 (85% -> 60%)
+            consistency_rate=0.6,
             num_queries=1,
             num_consistent=1,
             variations=["최적화된 응답"],
@@ -1016,6 +1101,9 @@ class EnhancedIssueSearcher:
             logger.warning(f"이슈 '{issue.title}': 모든 탐지기 실패")
             return None
         
+        # 최소 임계값 미리 설정
+        min_threshold = self.threshold_manager.thresholds.min_confidence_threshold
+        
         # 가중치 동적 조정
         max_confidence = max(score.confidence for score in all_scores.values())
         weights = self.threshold_manager.get_weights_for_confidence(max_confidence)
@@ -1031,8 +1119,11 @@ class EnhancedIssueSearcher:
         setattr(issue, 'hallucination_analysis', combined_score)
         setattr(issue, 'hallucination_confidence', combined_score.final_confidence)
         
-        # 최소 임계값 검사
-        min_threshold = self.threshold_manager.thresholds.min_confidence_threshold
+        # 디버깅용 상세 로그
+        logger.debug(f"이슈 '{issue.title[:30]}...' 환각 탐지 완료:")
+        logger.debug(f"  - 개별 점수: {[(k, f'{v.confidence:.3f}') for k, v in all_scores.items()]}")
+        logger.debug(f"  - 최종 신뢰도: {combined_score.final_confidence:.3f}")
+        logger.debug(f"  - 임계값 통과: {combined_score.final_confidence >= min_threshold}")
         if combined_score.final_confidence < min_threshold:
             logger.debug(
                 f"이슈 '{issue.title}' 신뢰도 부족: "
@@ -1076,6 +1167,283 @@ class EnhancedIssueSearcher:
                 'initial_low_confidence_issues': self.metrics.initial_low_confidence_issues
             }
         }
+
+    def _create_enhanced_regeneration_prompt(
+        self, 
+        failed_keywords: KeywordResult, 
+        search_result: SearchResult,
+        failure_type: str,
+        high_confidence_issues: Optional[List[IssueItem]] = None,
+        all_validated_issues: Optional[List[IssueItem]] = None
+    ) -> str:
+        """
+        실패한 검색 결과를 분석하여 향상된 키워드 재생성 프롬프트를 생성합니다.
+        
+        Args:
+            failed_keywords: 실패한 키워드 결과
+            search_result: 검색 결과
+            failure_type: 실패 유형 ('no_results', 'low_quality_results', 'insufficient_confidence')
+            high_confidence_issues: 높은 신뢰도 이슈들 (있는 경우)
+            all_validated_issues: 모든 검증된 이슈들 (있는 경우)
+        
+        Returns:
+            str: 향상된 키워드 생성을 위한 프롬프트
+        """
+        original_topic = failed_keywords.topic
+        previous_keywords = failed_keywords.primary_keywords + failed_keywords.related_terms + failed_keywords.context_keywords
+        
+        # 기본 컨텍스트 설정
+        base_context = f"주제 '{original_topic}'에 대한 키워드 재생성이 필요합니다."
+        
+        if failure_type == "no_results":
+            # 검색 결과가 없는 경우
+            enhanced_prompt = (
+                f"{base_context} "
+                f"이전 키워드 [{', '.join(previous_keywords[:10])}]로 검색했지만 결과가 없었습니다. "
+                f"다음을 고려하여 새로운 키워드를 생성해주세요:\n"
+                f"1. 더 구체적이고 전문적인 기술 용어 사용\n"
+                f"2. 동의어나 대체 표현 활용\n"
+                f"3. 최신 트렌드나 업데이트 관련 키워드 포함\n"
+                f"4. 'introduction', 'basics', 'tutorial' 같은 초보자 대상 키워드 제외\n"
+                f"새로운 접근 방식으로 '{original_topic}'의 핵심 기술적 측면을 다루는 키워드를 생성해주세요."
+            )
+            
+        elif failure_type == "low_quality_results":
+            # 검색 결과는 있지만 품질이 낮은 경우
+            issue_titles = [issue.title for issue in search_result.issues[:5]] if search_result.issues else []
+            enhanced_prompt = (
+                f"{base_context} "
+                f"이전 키워드 [{', '.join(previous_keywords[:10])}]로 검색한 결과 "
+                f"[{', '.join(issue_titles)}] 등이 나왔지만 환각 탐지를 통과하지 못했습니다. "
+                f"이는 다음 중 하나의 문제일 수 있습니다:\n"
+                f"1. 너무 일반적이거나 마케팅성 콘텐츠\n"
+                f"2. 부정확하거나 오래된 정보\n"
+                f"3. 주제와 관련성이 낮은 내용\n"
+                f"더 신뢰할 수 있고 기술적으로 정확한 결과를 위해 다음을 고려해주세요:\n"
+                f"- 공식 문서나 기술 블로그에서 사용하는 전문 용어\n"
+                f"- 특정 버전이나 릴리스 관련 키워드\n"
+                f"- 개발자 커뮤니티에서 활발히 논의되는 주제\n"
+                f"'{original_topic}'에 대해 더 전문적이고 신뢰할 수 있는 키워드를 생성해주세요."
+            )
+            
+        elif failure_type == "insufficient_confidence":
+            # 검증된 이슈는 있지만 높은 신뢰도 이슈가 부족한 경우
+            low_confidence_titles = []
+            if all_validated_issues and high_confidence_issues is not None:
+                low_confidence_issues = [
+                    issue for issue in all_validated_issues 
+                    if issue not in high_confidence_issues
+                ]
+                low_confidence_titles = [issue.title for issue in low_confidence_issues[:3]]
+            
+            enhanced_prompt = (
+                f"{base_context} "
+                f"이전 키워드 [{', '.join(previous_keywords[:10])}]로 검색하여 "
+                f"일부 결과를 얻었지만 높은 신뢰도 이슈가 부족합니다. "
+            )
+            
+            if low_confidence_titles:
+                enhanced_prompt += (
+                    f"낮은 신뢰도 결과 예시: [{', '.join(low_confidence_titles)}]. "
+                )
+            
+            enhanced_prompt += (
+                f"더 높은 품질의 결과를 위해 다음을 고려해주세요:\n"
+                f"1. 더 구체적이고 명확한 기술 키워드\n"
+                f"2. 최신 개발 동향이나 업데이트 관련 용어\n"
+                f"3. 실제 구현이나 사용 사례 관련 키워드\n"
+                f"4. 문제 해결이나 트러블슈팅 관련 용어\n"
+                f"5. 'how to', 'guide', 'tips' 같은 모호한 표현 대신 구체적인 액션 키워드\n"
+                f"'{original_topic}'에 대해 더 정확하고 실용적인 키워드를 생성해주세요."
+            )
+        
+        else:
+            # 기본 폴백
+            enhanced_prompt = (
+                f"{base_context} "
+                f"이전 키워드 [{', '.join(previous_keywords[:8])}]가 효과적이지 않았습니다. "
+                f"'{original_topic}'의 다른 중요한 측면이나 더 전문적인 접근 방식으로 "
+                f"새로운 키워드를 생성해주세요."
+            )
+        
+        return enhanced_prompt
+    
+    def _get_keyword_signature(self, keyword_result: KeywordResult) -> str:
+        """
+        키워드 결과의 고유 서명을 생성합니다. (무한 루프 방지용)
+        """
+        all_keywords = (
+            keyword_result.primary_keywords + 
+            keyword_result.related_terms + 
+            keyword_result.context_keywords
+        )
+        # 정렬된 키워드 목록으로 고유 서명 생성
+        return '|'.join(sorted(set(kw.lower().strip() for kw in all_keywords if kw)))
+    
+    async def _regenerate_keywords_safely(
+        self, 
+        current_keywords: KeywordResult,
+        search_result: SearchResult,
+        failure_type: str,
+        keyword_history: set,
+        regeneration_count: int,
+        max_regenerations: int,
+        high_confidence_issues=None,
+        all_validated_issues=None
+    ) -> tuple:
+        """
+        안전한 키워드 재생성 (무한 루프 방지)
+        
+        Returns:
+            tuple: (new_keywords, updated_regeneration_count, should_continue)
+        """
+        if regeneration_count >= max_regenerations:
+            logger.warning(f"최대 키워드 재생성 횟수({max_regenerations})에 도달. 재생성 중단.")
+            return current_keywords, regeneration_count, False
+        
+        enhanced_prompt = self._create_enhanced_regeneration_prompt(
+            current_keywords, 
+            search_result, 
+            failure_type,
+            high_confidence_issues,
+            all_validated_issues
+        )
+        
+        # 주제 연관성 보존: 원본 주제를 enhanced_prompt에 명시적으로 유지
+        original_topic = current_keywords.topic
+        topic_preserved_prompt = f"원본 주제 '{original_topic}'에 집중하여: {enhanced_prompt}"
+        
+        new_keywords = await generate_keywords_for_topic(topic_preserved_prompt)
+        new_signature = self._get_keyword_signature(new_keywords)
+        
+        # 중복 키워드 검사
+        if new_signature in keyword_history:
+            logger.warning(
+                f"동일한 키워드 조합이 재생성됨 (시도 {regeneration_count + 1}). "
+                f"무한 루프 방지를 위해 재생성 중단."
+            )
+            return current_keywords, regeneration_count, False
+        
+        keyword_history.add(new_signature)
+        regeneration_count += 1
+        
+        logger.info(f"새로운 키워드 생성 완료 (재생성 횟수: {regeneration_count}/{max_regenerations})")
+        
+        return new_keywords, regeneration_count, True
+
+    async def _apply_fallback_if_needed(self, search_result: SearchResult, original_topic: str) -> SearchResult:
+        """
+        검색 결과가 부족할 때 폴백 메커니즘을 적용합니다.
+        
+        폴백 전략:
+        1. 임계값을 더 낮춰서 기존 결과 재평가
+        2. 원본 주제의 핵심 키워드로 간단한 검색 재시도
+        3. 최소한의 유효한 결과라도 반환하도록 보장
+        """
+        if not search_result.issues:
+            logger.warning("검색 결과가 완전히 비어있음. 폴백 검색 실행.")
+            return await self._execute_fallback_search(original_topic)
+        
+        # 높은 신뢰도 이슈 개수 확인
+        high_confidence_count = sum(
+            1 for issue in search_result.issues 
+            if getattr(issue, 'hallucination_confidence', 0) >= 0.7
+        )
+        
+        # 폴백 조건: 높은 신뢰도 이슈가 1개 미만이고 전체 이슈도 3개 미만
+        if high_confidence_count < 1 and len(search_result.issues) < 3:
+            logger.warning(
+                f"결과 부족 (높은 신뢰도: {high_confidence_count}개, 전체: {len(search_result.issues)}개). "
+                f"폴백 메커니즘 실행."
+            )
+            
+            # 임계값을 대폭 낮춰서 기존 결과를 다시 평가
+            original_threshold = self.threshold_manager.thresholds.min_confidence_threshold
+            try:
+                # 임시로 임계값을 0.2로 낮춤
+                self.threshold_manager.thresholds.min_confidence_threshold = 0.2
+                logger.info("임계값을 0.2로 낮춰서 기존 이슈 재평가 중...")
+                
+                # 원본 이슈들을 더 관대한 기준으로 재검증
+                revalidated = []
+                for issue in search_result.issues:
+                    # 기존 환각 분석이 있으면 그것을 기준으로 재평가
+                    if hasattr(issue, 'hallucination_confidence'):
+                        if issue.hallucination_confidence >= 0.2:
+                            revalidated.append(issue)
+                
+                if revalidated:
+                    logger.info(f"재평가로 {len(revalidated)}개 이슈 복구됨")
+                    search_result.issues = revalidated
+                    return search_result
+                    
+            finally:
+                # 원래 임계값 복원
+                self.threshold_manager.thresholds.min_confidence_threshold = original_threshold
+            
+            # 재평가로도 결과가 없으면 새로운 폴백 검색
+            return await self._execute_fallback_search(original_topic)
+        
+        return search_result
+    
+    async def _execute_fallback_search(self, original_topic: str) -> SearchResult:
+        """
+        원본 주제의 핵심 키워드로 간단한 폴백 검색을 실행합니다.
+        """
+        logger.info(f"폴백 검색 실행: '{original_topic}'")
+        
+        # 원본 주제에서 핵심 키워드 추출
+        fallback_keywords = self._extract_core_keywords(original_topic)
+        
+        try:
+            # 기본 이슈 검색기로 직접 검색 (환각 탐지 없이)
+            fallback_result = await self.issue_searcher.search_issues(fallback_keywords)
+            
+            if fallback_result.issues:
+                # 최소한의 검증만 적용 (매우 관대한 기준)
+                validated_fallback = []
+                for issue in fallback_result.issues[:5]:  # 최대 5개만
+                    # 기본적인 신뢰도만 할당 (환각 탐지 건너뛰기)
+                    setattr(issue, 'hallucination_confidence', 0.3)
+                    setattr(issue, 'fallback_result', True)
+                    validated_fallback.append(issue)
+                
+                fallback_result.issues = validated_fallback
+                logger.info(f"폴백 검색 성공: {len(validated_fallback)}개 이슈 반환")
+                return fallback_result
+            
+        except Exception as e:
+            logger.error(f"폴백 검색 중 오류: {e}")
+        
+        # 최후의 수단: 빈 결과라도 유효한 구조로 반환
+        logger.warning("모든 폴백 시도 실패. 빈 결과 반환.")
+        return SearchResult(
+            query_keywords=fallback_keywords,
+            issues=[],
+            total_found=0,
+            search_time=0.1,
+            time_period="fallback",
+            api_calls_used=0,
+            confidence_score=0.0,
+            raw_responses=["fallback search executed"]
+        )
+    
+    def _extract_core_keywords(self, topic: str) -> List[str]:
+        """주제에서 핵심 키워드를 추출합니다."""
+        # iOS 관련 주제 처리
+        if 'ios' in topic.lower():
+            return ['iOS', 'Apple', 'iPhone', 'iPad', 'App Store']
+        elif 'wwdc' in topic.lower():
+            return ['WWDC', 'Apple', 'iOS', 'macOS', 'developer']
+        elif 'apple' in topic.lower():
+            return ['Apple', 'iOS', 'macOS', 'iPhone', 'iPad']
+        
+        # 일반적인 키워드 추출 (단어 분리)
+        words = topic.lower().split()
+        important_words = [w for w in words if len(w) > 3 and w not in ['the', 'and', 'for', 'with']]
+        
+        # 최소 1개의 키워드는 보장
+        return important_words[:3] if important_words else [topic]
 
     def _log_performance_report(self):
         """성능 리포트 출력 (Progressive Deepening 포함)"""

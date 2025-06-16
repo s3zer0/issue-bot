@@ -7,7 +7,7 @@ reportlab 라이브러리를 사용하여 전문적인 디자인의 PDF 보고�
 
 import os
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from io import BytesIO
 import asyncio
 
@@ -378,6 +378,9 @@ class PDFReportGenerator:
             bottomMargin=2*cm
         )
 
+        # 먼저 어떤 섹션들이 생성될지 결정
+        toc_structure = self._determine_toc_structure(enhanced_data)
+
         # 문서 요소 리스트
         story = []
 
@@ -385,16 +388,16 @@ class PDFReportGenerator:
         story.extend(self._create_cover_page(enhanced_data))
         story.append(PageBreak())
 
-        # 목차
-        story.extend(self._create_table_of_contents())
+        # 동적 목차 (실제 생성될 섹션 기반)
+        story.extend(self._create_dynamic_table_of_contents(toc_structure))
         story.append(PageBreak())
 
         # 핵심 요약
         story.extend(self._create_executive_summary(enhanced_data))
         story.append(PageBreak())
 
-        # Dynamic: Generate sections based on topic classification
-        story.extend(self._create_dynamic_sections(enhanced_data))
+        # 동적 섹션들 (목차와 일치)
+        story.extend(self._create_structured_dynamic_sections(enhanced_data, toc_structure))
 
         # 부록
         story.extend(self._create_appendix(enhanced_data))
@@ -458,6 +461,101 @@ class PDFReportGenerator:
         ]))
 
         story.append(meta_table)
+
+        return story
+
+    def _determine_toc_structure(self, data: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """
+        실제 생성될 섹션들을 기반으로 목차 구조를 결정합니다.
+        
+        Args:
+            data: 보고서 데이터
+            
+        Returns:
+            List[Tuple[str, str]]: (섹션명, 예상 페이지) 튜플 리스트
+        """
+        search_result = data['search_result']
+        
+        # 주제 분류
+        topic = " ".join(search_result.query_keywords)
+        keywords = search_result.query_keywords
+        classification = self.topic_classifier.classify_topic(topic, keywords)
+        
+        toc_items = []
+        page_number = 3  # 표지와 목차 이후 시작
+        
+        # 1. 핵심 요약 (항상 포함)
+        toc_items.append(("1. 핵심 요약", str(page_number)))
+        page_number += 1
+        
+        section_number = 2
+        
+        # 2. 주제 분석 결과 (동적 섹션 시작 시 추가)
+        toc_items.append((f"{section_number}. 주제 분석 결과", str(page_number)))
+        section_number += 1
+        page_number += 1
+        
+        # 3. 주요 발견사항 (항상 포함)
+        toc_items.append((f"{section_number}. 주요 발견사항", str(page_number)))
+        section_number += 1
+        page_number += 1
+        
+        # 4. 상세 이슈 분석 (항상 포함)
+        toc_items.append((f"{section_number}. 상세 이슈 분석", str(page_number)))
+        section_number += 1
+        page_number += 2  # 상세 분석은 보통 2페이지 정도
+        
+        # 5. 트렌드 분석 (조건부)
+        if self._should_include_trend_analysis(classification):
+            toc_items.append((f"{section_number}. 트렌드 분석", str(page_number)))
+            section_number += 1
+            page_number += 1
+        
+        # 6. 리스크 및 기회 (조건부)
+        if self._should_include_risk_analysis(classification):
+            toc_items.append((f"{section_number}. 리스크 및 기회", str(page_number)))
+            section_number += 1
+            page_number += 1
+        
+        # 7. 권장 조치사항 (항상 포함, 적응형)
+        toc_items.append((f"{section_number}. 권장 조치사항", str(page_number)))
+        page_number += 1
+        
+        # 8. 부록
+        toc_items.append(("부록. 환각 탐지 상세 결과", str(page_number)))
+        
+        logger.info(f"동적 목차 구조 결정 완료: {len(toc_items)}개 섹션")
+        logger.debug(f"목차 구조: {[item[0] for item in toc_items]}")
+        return toc_items
+
+    def _create_dynamic_table_of_contents(self, toc_structure: List[Tuple[str, str]]) -> List:
+        """
+        동적으로 결정된 구조로 목차를 생성합니다.
+        
+        Args:
+            toc_structure: 목차 구조 리스트
+            
+        Returns:
+            List: 목차 PDF 요소들
+        """
+        story = []
+
+        story.append(Paragraph("목차", self.styles['CustomHeading1']))
+        story.append(Spacer(1, 0.3*inch))
+
+        for item, page in toc_structure:
+            # 링크 없이 단순 텍스트로 생성
+            toc_line = Paragraph(
+                f'{item}{"." * (50 - len(item))}{page}',
+                ParagraphStyle(
+                    'TOCItem',
+                    parent=self.styles['CustomBody'],
+                    leftIndent=20,
+                    rightIndent=20
+                )
+            )
+            story.append(toc_line)
+            story.append(Spacer(1, 0.1*inch))
 
         return story
 
@@ -665,6 +763,72 @@ class PDFReportGenerator:
 
         story.append(Spacer(1, 0.3*inch))
         return story
+
+    def _create_structured_dynamic_sections(self, data: Dict[str, Any], toc_structure: List[Tuple[str, str]]) -> List:
+        """
+        목차 구조와 일치하는 동적 섹션들을 생성합니다.
+        
+        Args:
+            data: 보고서 데이터
+            toc_structure: 목차 구조
+            
+        Returns:
+            List: PDF 요소들
+        """
+        story = []
+        search_result = data['search_result']
+        
+        # 주제 분류
+        topic = " ".join(search_result.query_keywords)
+        keywords = search_result.query_keywords
+        classification = self.topic_classifier.classify_topic(topic, keywords)
+        
+        logger.info(f"구조화된 섹션 생성 시작 - 주제: {classification.primary_type.value}")
+        
+        # 목차 구조에 따라 섹션들을 순서대로 생성
+        for section_name, _ in toc_structure:
+            section_content = []
+            
+            if "주제 분석 결과" in section_name:
+                section_content = self._create_topic_analysis_section(classification)
+            elif "주요 발견사항" in section_name:
+                section_content = self._create_key_findings(data)
+            elif "상세 이슈 분석" in section_name:
+                section_content = self._create_detailed_issues(data)
+            elif "트렌드 분석" in section_name:
+                section_content = self._create_trend_analysis(data)
+            elif "리스크 및 기회" in section_name:
+                section_content = self._create_risks_opportunities(data)
+            elif "권장 조치사항" in section_name:
+                section_content = self._create_adaptive_recommendations(data, classification)
+            elif "부록" not in section_name:  # 부록은 별도 처리
+                logger.warning(f"알 수 없는 섹션: {section_name}")
+                continue
+            
+            if section_content:
+                story.extend(section_content)
+                story.append(PageBreak())
+        
+        logger.info(f"구조화된 섹션 생성 완료")
+        return story
+
+    def _create_topic_analysis_section(self, classification) -> List:
+        """주제 분석 결과 섹션 생성"""
+        classification_markdown = f"""
+# 2. 주제 분석 결과
+
+## 🎯 분류 결과
+
+**주제 유형**: {self._get_topic_type_korean(classification.primary_type)}  
+**신뢰도**: {classification.confidence:.1%}  
+**분석 근거**: {classification.reasoning}  
+**매칭 키워드**: {', '.join(classification.keywords_matched)}
+
+---
+
+이 분석 결과를 바탕으로 다음 섹션들의 내용이 주제 특성에 맞게 조정되었습니다.
+"""
+        return self.markdown_converter.convert_to_pdf_elements(classification_markdown)
 
     def _create_dynamic_sections(self, data: Dict[str, Any]) -> List:
         """

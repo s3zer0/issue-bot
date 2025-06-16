@@ -106,6 +106,13 @@ async def generate_keywords_for_topic(
     Returns:
         KeywordResult: 기존 형식의 키워드 결과
     """
+    # 입력 검증: 빈 토픽 방지
+    if not topic or not topic.strip():
+        logger.warning("빈 토픽이 제공됨. 기본 키워드로 폴백.")
+        return _create_fallback_result("technology trends")
+    
+    # 토픽 정규화
+    topic = topic.strip()
     logger.info(f"키워드 생성 요청: '{topic}'")
 
     # 멀티 소스 매니저 사용
@@ -122,6 +129,16 @@ async def generate_keywords_for_topic(
 
         # 기존 형식으로 변환
         legacy_result = multi_result.to_legacy_format(topic)
+
+        # 결과 검증: 빈 키워드 방지
+        if not legacy_result.primary_keywords and not legacy_result.related_terms:
+            logger.warning("생성된 키워드가 모두 비어있음. 폴백 사용.")
+            return _create_fallback_result(topic)
+        
+        # 빈 키워드 필터링
+        legacy_result.primary_keywords = [kw for kw in legacy_result.primary_keywords if kw and kw.strip()]
+        legacy_result.related_terms = [kw for kw in legacy_result.related_terms if kw and kw.strip()]
+        legacy_result.context_keywords = [kw for kw in legacy_result.context_keywords if kw and kw.strip()]
 
         # 통계 로그
         logger.info(

@@ -122,6 +122,10 @@ class IssueSearcher:
         """
         try:
             content = api_response['choices'][0]['message']['content']
+            
+            # 콘텐츠 정제: 디버깅 메시지 및 상태 메시지 제거
+            content = self._sanitize_content(content)
+            
             # 이슈 섹션이 '## **' 패턴으로 구분된다고 가정하고 분리
             issue_blocks = re.finditer(r'(?s)(##\s*\*\*.*?(?=\n##\s*\*\*|\Z))', content)
             issues = [self._parse_issue_section(match.group(1).strip()) for match in issue_blocks]
@@ -129,6 +133,44 @@ class IssueSearcher:
         except (KeyError, IndexError) as e:
             logger.error(f"API 응답 파싱 실패: {e}")
             return []
+
+    def _sanitize_content(self, content: str) -> str:
+        """
+        콘텐츠에서 디버깅 메시지나 상태 메시지를 제거합니다.
+        
+        Args:
+            content: 정제할 콘텐츠
+            
+        Returns:
+            str: 정제된 콘텐츠
+        """
+        # 키워드 재생성 관련 메시지 패턴들
+        debug_patterns = [
+            r'Keywords? need to be regenerated for topic.*',
+            r'키워드.*재생성.*',
+            r'키워드 재생성.*',
+            r'시뮬레이션 모드.*',
+            r'API 실패.*폴백.*',
+            r'최종 폴백.*',
+            r'연속 실패.*회.*',
+            r'Error occurred during keyword generation.*',
+            r'키워드 생성 완료.*재생성 횟수.*',
+            r'하이브리드 검색.*',
+            r'폴백.*시뮬레이션.*',
+        ]
+        
+        # 각 패턴에 대해 제거 수행
+        for pattern in debug_patterns:
+            content = re.sub(pattern, '', content, flags=re.IGNORECASE | re.MULTILINE)
+        
+        # 빈 줄 여러 개를 하나로 정리
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+        
+        # 디버깅 메시지 제거 로그
+        if any(re.search(pattern, content, re.IGNORECASE) for pattern in debug_patterns):
+            logger.info("콘텐츠에서 디버깅 메시지 제거됨")
+        
+        return content.strip()
 
     def _parse_issue_section(self, section: str) -> Optional[IssueItem]:
         """단일 이슈 텍스트 블록을 파싱하여 IssueItem 객체를 생성합니다.

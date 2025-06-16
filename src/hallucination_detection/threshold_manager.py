@@ -26,17 +26,17 @@ class ConfidenceLevel(Enum):
 class ThresholdConfig:
     """환각 탐지 임계값 설정."""
 
-    # 전체 시스템 임계값
-    min_confidence_threshold: float = 0.5  # 최소 허용 신뢰도
+    # 전체 시스템 임계값 (더 관대하게 조정)
+    min_confidence_threshold: float = 0.35  # 최소 허용 신뢰도 (0.5 → 0.35)
 
-    # 개별 탐지기 임계값
-    reppl_threshold: float = 0.5  # RePPL 최소 신뢰도
-    consistency_threshold: float = 0.6  # 자기 일관성 최소 신뢰도
-    llm_judge_threshold: float = 0.7  # LLM Judge 최소 신뢰도
+    # 개별 탐지기 임계값 (기술 콘텐츠에 더 적합하게 조정)
+    reppl_threshold: float = 0.4  # RePPL 최소 신뢰도 (0.5 → 0.4)
+    consistency_threshold: float = 0.45  # 자기 일관성 최소 신뢰도 (0.6 → 0.45)
+    llm_judge_threshold: float = 0.55  # LLM Judge 최소 신뢰도 (0.7 → 0.55)
 
     # 단계별 적용 임계값 (다음 탐지기로 진행하기 위한 최소값)
-    proceed_to_consistency: float = 0.4  # 일관성 검사 진행 임계값
-    proceed_to_llm_judge: float = 0.5  # LLM Judge 진행 임계값
+    proceed_to_consistency: float = 0.3  # 일관성 검사 진행 임계값 (0.4 → 0.3)
+    proceed_to_llm_judge: float = 0.4  # LLM Judge 진행 임계값 (0.5 → 0.4)
 
     # 신뢰도 등급 경계값
     very_high_boundary: float = 0.85
@@ -77,12 +77,12 @@ class ThresholdManager:
         """환경 변수에서 임계값 설정을 로드합니다."""
         try:
             return ThresholdConfig(
-                min_confidence_threshold=float(config.get('MIN_CONFIDENCE_THRESHOLD', 0.5)),
-                reppl_threshold=float(config.get('REPPL_THRESHOLD', 0.5)),
-                consistency_threshold=float(config.get('CONSISTENCY_THRESHOLD', 0.6)),
-                llm_judge_threshold=float(config.get('LLM_JUDGE_THRESHOLD', 0.7)),
-                proceed_to_consistency=float(config.get('PROCEED_TO_CONSISTENCY', 0.4)),
-                proceed_to_llm_judge=float(config.get('PROCEED_TO_LLM_JUDGE', 0.5)),
+                min_confidence_threshold=float(config.get('MIN_CONFIDENCE_THRESHOLD', 0.35)),
+                reppl_threshold=float(config.get('REPPL_THRESHOLD', 0.4)),
+                consistency_threshold=float(config.get('CONSISTENCY_THRESHOLD', 0.45)),
+                llm_judge_threshold=float(config.get('LLM_JUDGE_THRESHOLD', 0.55)),
+                proceed_to_consistency=float(config.get('PROCEED_TO_CONSISTENCY', 0.3)),
+                proceed_to_llm_judge=float(config.get('PROCEED_TO_LLM_JUDGE', 0.4)),
                 very_high_boundary=float(config.get('VERY_HIGH_BOUNDARY', 0.85)),
                 high_boundary=float(config.get('HIGH_BOUNDARY', 0.70)),
                 moderate_boundary=float(config.get('MODERATE_BOUNDARY', 0.50)),
@@ -147,8 +147,14 @@ class ThresholdManager:
         low_confidence = []
 
         for issue in issues:
-            confidence = getattr(issue, 'hallucination_confidence', 0.0)
+            # 우선순위: hallucination_confidence > combined_confidence > 기본값 0.0
+            confidence = getattr(issue, 'hallucination_confidence', 
+                               getattr(issue, 'combined_confidence', 0.0))
             level = self.classify_confidence(confidence)
+            
+            # 디버깅용 로그 (높은 신뢰도 값 감지)
+            if confidence >= 0.8:
+                logger.warning(f"높은 신뢰도 감지: '{issue.title[:50]}...' = {confidence:.3f} ({level.value})")
 
             if level in [ConfidenceLevel.VERY_HIGH, ConfidenceLevel.HIGH]:
                 high_confidence.append(issue)

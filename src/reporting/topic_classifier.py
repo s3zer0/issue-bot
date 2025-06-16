@@ -46,9 +46,9 @@ class TopicClassifier:
             TopicType.TECHNICAL_ANNOUNCEMENT: {
                 'keywords': {
                     'high': ['iOS', 'WWDC', 'API', 'SDK', 'framework', 'release', 'beta', 'update', 
-                            'version', 'developer', 'programming', 'code', 'software', 'app'],
+                            'version', 'developer', 'programming', 'code', 'software', 'app', 'AI', 'GPT'],
                     'medium': ['tech', 'technology', 'platform', 'system', 'digital', 'web', 
-                             'mobile', 'cloud', 'database', 'security'],
+                             'mobile', 'cloud', 'database', 'security', 'OpenAI', 'performance'],
                     'low': ['announce', 'launch', 'new', 'feature', 'tool']
                 },
                 'patterns': [
@@ -136,7 +136,7 @@ class TopicClassifier:
             TopicType.FINANCIAL_MARKET: {
                 'keywords': {
                     'high': ['stock', 'market', 'trading', 'investment', 'financial', 'economy', 
-                            'earnings', 'IPO', 'dividend', 'portfolio', 'crypto', 'bitcoin'],
+                            'earnings', 'IPO', 'dividend', 'portfolio', 'crypto', 'bitcoin', 'revenue', 'growth'],
                     'medium': ['bank', 'finance', 'money', 'capital', 'fund', 'asset', 
                              'commodity', 'currency'],
                     'low': ['price', 'value', 'cost', 'worth']
@@ -149,6 +149,16 @@ class TopicClassifier:
                 ],
                 'sections': ['market_analysis', 'financial_impact', 'investment_implications', 
                            'risk_assessment', 'economic_indicators']
+            },
+            
+            TopicType.GENERAL: {
+                'keywords': {
+                    'high': [],  # General type doesn't have specific high-priority keywords
+                    'medium': ['topic', 'issue', 'information', 'general', 'news', 'report'],
+                    'low': ['other', 'misc', 'various', 'general']
+                },
+                'patterns': [],  # No specific patterns for general topics
+                'sections': ['executive_summary', 'key_findings']  # Basic sections for general topics
             }
         }
         
@@ -244,16 +254,17 @@ class TopicClassifier:
             if re.search(pattern, text, re.IGNORECASE):
                 score += 5.0  # High weight for pattern matches
         
-        # Normalize score (simple normalization)
-        max_possible_score = (
-            len(patterns['keywords'].get('high', [])) * 3.0 +
-            len(patterns['keywords'].get('medium', [])) * 2.0 +
-            len(patterns['keywords'].get('low', [])) * 1.0 +
-            len(patterns.get('patterns', [])) * 5.0
-        )
-        
-        if max_possible_score > 0:
-            normalized_score = min(1.0, score / max_possible_score)
+        # Normalize score with a more lenient calculation
+        # Consider that matching just a few keywords should give reasonable confidence
+        if score > 0:
+            # Base normalization on expected matches rather than max possible
+            # Matching 2-3 high-weight keywords should give good confidence
+            expected_good_score = 15.0  # e.g., 3 high keywords or 1 pattern + 2 medium keywords
+            normalized_score = min(1.0, score / expected_good_score)
+            
+            # Apply a minimum threshold boost to ensure reasonable confidence
+            if normalized_score > 0:
+                normalized_score = max(0.4, normalized_score)  # Minimum 40% if any match
         else:
             normalized_score = 0.0
         

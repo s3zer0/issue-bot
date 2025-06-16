@@ -175,10 +175,10 @@ class EnhancedReportGenerator:
             report += "\n## 🟡 중간 신뢰도 이슈\n\n"
             report += self._create_detailed_issues_section(moderate, include_all=False)
 
-        # 낮은 신뢰도 이슈 (옵션에 따라)
-        if low and self.threshold_manager.thresholds.include_low_confidence:
-            report += "\n## 🔴 낮은 신뢰도 이슈 (참고용)\n\n"
-            report += self._create_low_confidence_summary(low)
+        # 낮은 신뢰도 이슈
+        if low:
+            report += "\n## 🔴 낮은 신뢰도 이슈\n\n"
+            report += self._create_detailed_issues_section(low, include_all=False)
 
         # 환각 탐지 분석 요약
         report += self._create_hallucination_analysis_summary(search_result)
